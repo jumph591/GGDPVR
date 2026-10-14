@@ -1,7 +1,9 @@
 #include "settings_guard.h"
 
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -79,12 +81,69 @@ bool LooksSingleByte(const std::string& s) {
     return s.size() >= 2 && !(uint8_t(s[0]) == 0xFF && uint8_t(s[1]) == 0xFE) && !(uint8_t(s[0]) == 0xFE && uint8_t(s[1]) == 0xFF);
 }
 
+std::string g_note;      // lines for the log once it is open (attach runs before logging starts)
+bool g_logOpen = false;  // set by InstallExitHooks, which runs after the log is configured
+void Note(const std::string& s) {
+    OutputDebugStringA((s + "\n").c_str());
+    if (g_logOpen) LOGP("%s", s.c_str());
+    else g_note += (g_note.empty() ? "" : "\n") + s;
+}
+
+// A resolution no display can show can't be the player's own: the game clamps its window to the desktop, and
+// fullscreen uses a display mode. The mod's VR render size (e.g. 3640x3782) once became the "own" value (1.0.0: the
+// startup logos then drew into a squeezed, near-square window).
+bool PlausibleResolution(int w, int h) {
+    if (w <= 0 || h <= 0) return true;  // not a number: leave it alone
+    int maxW = 0, maxH = 0;
+    bool exact = false;
+    DISPLAY_DEVICEW dd{sizeof dd};
+    for (DWORD d = 0; EnumDisplayDevicesW(nullptr, d, &dd, 0); ++d, dd = {sizeof dd}) {
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+        DEVMODEW dm{};
+        dm.dmSize = sizeof dm;
+        for (DWORD m = 0; EnumDisplaySettingsW(dd.DeviceName, m, &dm); ++m) {
+            maxW = std::max(maxW, int(dm.dmPelsWidth)), maxH = std::max(maxH, int(dm.dmPelsHeight));
+            if (int(dm.dmPelsWidth) == w && int(dm.dmPelsHeight) == h) exact = true;
+        }
+    }
+    if (!maxW || !maxH || exact) return true;  // no mode list (some systems): can't judge
+    // larger than every mode, or near-square / portrait without being a real mode (VR eye sizes are near-square)
+    return w <= maxW && h <= maxH && h * 10 < w * 9;
+}
+bool ResOf(const std::string& ini, int& w, int& h) {
+    size_t b, e;
+    if (!FindKey(ini, "ResX", b, e)) return false;
+    w = atoi(ini.substr(b, e - b).c_str());
+    if (!FindKey(ini, "ResY", b, e)) return false;
+    h = atoi(ini.substr(b, e - b).c_str());
+    return true;
+}
+std::string SetValue(std::string ini, const char* key, const std::string& v) {
+    size_t b, e;
+    if (FindKey(ini, key, b, e)) ini.replace(b, e - b, v);
+    return ini;
+}
+
 void SaveBaseline(const std::string& live) {
     std::string out = "; GGDPVR: the user's own values for settings GGDPVR overrides at runtime\r\n";
+    std::string vals = "[SystemSettings]\n";
     for (const char* k : kKeys) {
         size_t b, e;
-        if (FindKey(live, k, b, e)) out += std::string(k) + "=" + live.substr(b, e - b) + "\r\n";
+        if (FindKey(live, k, b, e)) vals += std::string(k) + "=" + live.substr(b, e - b) + "\r\n";
     }
+    int w = 0, h = 0;
+    if (ResOf(vals, w, h) && !PlausibleResolution(w, h)) {
+        // not the player's: the previous baseline's resolution if that one is real, else the game's default
+        std::string old;
+        int ow = 0, oh = 0;
+        const bool keepOld = ReadAll(g_baseline, old) && ResOf("[SystemSettings]\n" + old, ow, oh) && ow > 0 && oh > 0 &&
+                             PlausibleResolution(ow, oh);
+        const std::string nx = keepOld ? std::to_string(ow) : "1280", ny = keepOld ? std::to_string(oh) : "720";
+        vals = SetValue(SetValue(vals, "ResX", nx), "ResY", ny);
+        Note("[settings] the game's resolution " + std::to_string(w) + "x" + std::to_string(h) +
+             " is no display's (a VR render size left behind): the player's resolution is taken as " + nx + "x" + ny);
+    }
+    out += vals.substr(17);  // without the "[SystemSettings]\n" used for the lookups
     WriteAll(g_baseline, out);
 }
 
@@ -105,27 +164,33 @@ bool RestoreBaseline(const char* why) {
     if (out != live && !WriteAll(g_live, out)) return false;
     DeleteFileW(g_marker.c_str());
     g_dirty = false;
-    // log may not be open yet during DllMain; OutputDebugString + deferred log
-    std::string msg = std::string("[settings] restored user settings (") + why + "):" + (changes.empty() ? " none needed" : changes);
-    OutputDebugStringA((msg + "\n").c_str());
-    if (g_ready) LOGP("%s", msg.c_str());
+    // the log may not be open yet (DllMain): Note keeps the line until it is
+    Note(std::string("[settings] restored user settings (") + why + "):" + (changes.empty() ? " none needed" : changes));
     return true;
 }
 }  // namespace
 
-void OnProcessAttach() {
-    g_live = DocumentsDir() + L"\\My Games\\UnrealEngine3\\GG2Game\\Config\\GG2SystemSettings.ini";
-    const std::wstring dir = LocalDir();
-    g_baseline = dir + L"\\user_settings_baseline.ini";
-    g_marker = dir + L"\\settings_dirty";
+namespace {
+// Takes charge of the settings file: at DLL attach, or - when the file doesn't exist yet then (the first launch, or
+// the game regenerating its config) - at the first MarkDirty, before any override. 1.0.0 gave up for the whole
+// session instead: the overrides persisted unguarded and became the next start's baseline.
+void Start() {
     std::string live;
-    if (!ReadAll(g_live, live) || !LooksSingleByte(live)) return;  // nothing we can safely manage
+    if (!ReadAll(g_live, live) || !LooksSingleByte(live)) return;  // nothing we can safely manage (yet)
     g_ready = true;
+    {  // a baseline holding a resolution no display has (a VR render size, 1.0.0) is repaired before anything uses it
+        std::string base;
+        int w = 0, h = 0;
+        if (ReadAll(g_baseline, base) && ResOf("[SystemSettings]\n" + base, w, h) && !PlausibleResolution(w, h)) {
+            std::string fixed = SetValue(SetValue("[SystemSettings]\n" + base, "ResX", "1280"), "ResY", "720");
+            WriteAll(g_baseline, fixed.substr(17));
+            Note("[settings] the saved resolution " + std::to_string(w) + "x" + std::to_string(h) +
+                 " is no display's (a VR render size): repaired to the game's default 1280x720");
+        }
+    }
     if (GetFileAttributesW(g_marker.c_str()) != INVALID_FILE_ATTRIBUTES &&
         GetFileAttributesW(g_baseline.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        g_ready = false;  // logging is not up yet
         RestoreBaseline("previous run did not exit cleanly");
-        g_ready = true;
         // a baseline written before a key was guarded lacks it (0.9.97: Fullscreen, UseVsync - a test run's fullscreen
         // stayed): those keys are added from the restored file, so they're guarded from now on
         std::string base, now;
@@ -141,17 +206,35 @@ void OnProcessAttach() {
     } else {
         SaveBaseline(live);
     }
+    // the file itself holding such a resolution (no dirty marker left to say so): the baseline's goes back in now,
+    // before the engine reads it - the startup logos drew into a squeezed near-square window otherwise
+    std::string now;
+    int w = 0, h = 0;
+    if (ReadAll(g_live, now) && ResOf(now, w, h) && !PlausibleResolution(w, h)) RestoreBaseline("resolution no display has");
+}
+}  // namespace
+
+void OnProcessAttach() {
+    g_live = DocumentsDir() + L"\\My Games\\UnrealEngine3\\GG2Game\\Config\\GG2SystemSettings.ini";
+    const std::wstring dir = LocalDir();
+    g_baseline = dir + L"\\user_settings_baseline.ini";
+    g_marker = dir + L"\\settings_dirty";
+    Start();
 }
 
 std::string BaselineValue(const char* key, const char* fallback) {
     std::string base;
-    size_t b, e;
+    size_t b = 0, e = 0;
     if (g_ready && ReadAll(g_baseline, base) && FindKey("[SystemSettings]\n" + base, key, b, e))
         return ("[SystemSettings]\n" + base).substr(b, e - b);
     return fallback;
 }
 
 void MarkDirty() {
+    if (!g_ready && !g_live.empty()) {  // the file didn't exist at attach: the engine has written it by now
+        Start();
+        LOGP("[settings] GG2SystemSettings.ini %s", g_ready ? "appeared after start: guarding it from now" : "still unreadable: NOT guarded");
+    }
     if (!g_ready || g_dirty.exchange(true)) return;
     WriteAll(g_marker, "GGDPVR runtime overrides active\r\n");
     LOGP("[settings] runtime overrides active; your settings will be restored on exit");
@@ -186,6 +269,16 @@ bool InstallExitHooks() {
     ok &= MH_CreateHookApi(L"kernel32", "ExitProcess", (void*)&hk_ExitProcess, (void**)&o_ExitProcess) == MH_OK;
     ok &= MH_EnableHook(MH_ALL_HOOKS) == MH_OK;
     LOG("[settings] exit hooks %s", ok ? "installed" : "FAILED");
+    // the log is configured by now: the lines from DLL attach
+    g_logOpen = true;
+    for (size_t a = 0; a < g_note.size();) {
+        size_t b = g_note.find('\n', a);
+        if (b == std::string::npos) b = g_note.size();
+        LOGP("%s", g_note.substr(a, b - a).c_str());
+        a = b + 1;
+    }
+    g_note.clear();
+    if (!g_ready) LOGP("[settings] GG2SystemSettings.ini not found yet (first launch?): guarded once the game writes it");
     return ok;
 }
 }  // namespace ggdpvr::settings_guard

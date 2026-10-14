@@ -879,6 +879,8 @@ void Frame(IDXGISwapChain* sc, ID3D11Device* dev) {
                     uiQuad.pose = UiPanelPoseRT();
                     uiQuad.size = {w, w * float(ud.Height) / float(ud.Width)};
                     uiLayer = reinterpret_cast<XrCompositionLayerBaseHeader*>(&uiQuad);
+                    // the desktop window shows this eye: the panel goes into it too (the headset's copy is made above)
+                    if (config::Get().vrDesktopMirror) vr::ui::MirrorPanelRT(dev, bb, rec);
                 }
             }
             EndXrFrame(g_st.fs, reinterpret_cast<XrCompositionLayerBaseHeader*>(&proj), uiLayer);
@@ -1172,21 +1174,41 @@ bool SampleHead(HeadSample& out) {
     // lock holds them), as many slots as recent frames took (predict_frame_slots)
     int slots = 1;
     if (config::Get().vrPredictSlots) slots = std::max(1, std::min(4, int(std::lround(g_slotEst.load()))));
+    // The last real stereo frame's display time is only advanced by stereo frames: after a loading stretch on the flat
+    // screen it is seconds old. Some runtimes give no pose that far back (WiVRn: none beyond 1 s from its samples),
+    // and without a pose stereo never restarted - the stage stayed flat (1.0.0, Linux + WiVRn). It is used only while
+    // recent; otherwise the newest predicted display time is the base.
+    const XrTime period = g_displayPeriod.load(), fresh = g_lastDisplayTime.load();
     const XrTime lr = g_lastRealDisplay.load();
-    const XrTime base = lr ? lr : g_lastDisplayTime.load();
-    const XrTime t = base + g_displayPeriod * slots;
-    XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
-    li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    li.displayTime = t;
-    li.space = s.local;
+    const XrTime base = lr && fresh - lr <= 8 * period ? lr : fresh;
     XrViewState vs{XR_TYPE_VIEW_STATE};
     XrView views[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
-    uint32_t n = 0;
-    if (XR_FAILED(xrLocateViews(s.session, &li, &vs, 2, &n, views)) || n != 2) return false;
     XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
-    if (XR_FAILED(xrLocateSpace(s.view, s.local, t, &loc)) ||
-        !(loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
-        return false;
+    auto locate = [&](XrTime t) {
+        XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
+        li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+        li.displayTime = t;
+        li.space = s.local;
+        vs = {XR_TYPE_VIEW_STATE};
+        views[0] = {XR_TYPE_VIEW}, views[1] = {XR_TYPE_VIEW};
+        loc = {XR_TYPE_SPACE_LOCATION};
+        uint32_t n = 0;
+        XrResult r = xrLocateViews(s.session, &li, &vs, 2, &n, views);
+        if (XR_SUCCEEDED(r) && n != 2) r = XR_ERROR_VALIDATION_FAILURE;
+        if (XR_SUCCEEDED(r)) r = xrLocateSpace(s.view, s.local, t, &loc);
+        const bool ok = XR_SUCCEEDED(r) && (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
+        if (!ok) {
+            static ULONGLONG s_next = 0;
+            static int s_logs = 0;
+            if (s_logs < 20 && GetTickCount64() >= s_next)
+                ++s_logs, s_next = GetTickCount64() + 2000,
+                    LOG("[xr] no head pose for %.1f ms ahead of the newest frame (result %d, flags 0x%llX)",
+                        double(t - fresh) / 1e6, int(r), (unsigned long long)loc.locationFlags);
+        }
+        return ok;
+    };
+    // a refused prediction is retried once at the newest display time
+    if (!locate(base + period * slots) && (base == fresh || !locate(fresh + period * slots))) return false;
     if (!(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) loc.pose.position = {0, 0, 0};
     out.raw = loc.pose;
     out.fov[0] = views[0].fov;

@@ -28,7 +28,7 @@ Windows Mixed Reality, Pimax and others.
 - **Game sound in the headset**, kept playing when another window has the focus.
 - **A small setup program** to install, repair, switch off and uninstall - it never touches the game's own files or
   your save data.
-- **No network code**: the mod never connects to anything. Logging is off unless you turn it on.
+- **No network code**: the mod never connects to anything. Its log for bug reports stays on your PC.
 
 ## Requirements
 
@@ -49,8 +49,8 @@ Windows Mixed Reality, Pimax and others.
 3. Click **Install**.
 4. Start your VR software, then start the game (from Steam, or the setup's *Start game* button).
 
-`GGDPVR-Setup.exe` is also how you repair, switch the mod off and on, open your settings and logs, and uninstall. It
-always keeps your settings.
+`GGDPVR-Setup.exe` is also how you repair, switch the mod off and on, open your settings and logs, turn logging off
+and on, and uninstall. It always keeps your settings.
 
 ### Updating
 
@@ -202,9 +202,11 @@ Capture **one eye** rather than both - a blend of both eyes looks doubled.
 - **The game crashes when choosing your character at New Game**: this can happen without the mod too, after other mods
   (for example costume packs) have changed the game's files. Restore the original game files (Steam: *Verify integrity
   of game files*), then reinstall GGDPVR with the setup's *Repair*.
-- **Reporting a problem**: set `log=1` in `ggdpvr.ini`, play until it happens, quit, and attach
-  `%LOCALAPPDATA%\GGDPVR\logs\ggdpvr.log` to an [issue](../../issues). The log never contains your user name or device
-  names.
+- **Reporting a problem**: play until it happens, quit, and attach `%LOCALAPPDATA%\GGDPVR\logs\ggdpvr.log` (the
+  setup's *Log folder* opens it; `ggdpvr.prev.log` is the session before) to an [issue](../../issues). Say which
+  headset and VR software you use, and your operating system if it isn't Windows. If you turned logging off, turn it
+  back on first (*Turn logging on* in the setup, or `log=1` in `ggdpvr.ini`). The log never contains your user name
+  or device names.
 
 ## Known limitations
 
@@ -242,8 +244,10 @@ Layout:
 
 ## Privacy
 
-GGDPVR has no network code: it never connects to the internet and never sends anything anywhere. It writes no log
-unless you set `log=1`; the log stays on your PC and never contains your Windows user name or device names.
+GGDPVR has no network code: it never connects to the internet and never sends anything anywhere. For bug reports it
+keeps a log of the last few game sessions on your PC (`%LOCALAPPDATA%\GGDPVR\logs`, at most 100 MB per session). The
+log never contains your Windows user name or device names, and it only leaves your PC if you send it yourself.
+*Turn logging off* in the setup (or `log=0` in `ggdpvr.ini`) stops it.
 
 ## License
 

@@ -7,8 +7,8 @@ namespace ggdpvr::log {
 // log survives a crash.
 void Init();
 void Write(const char* fmt, ...);
-// Logging is opt-in (0.9.102): [debug] debug=1 writes the one, full log; otherwise nothing is written. Lines before
-// Configure() are held in memory. GGDPVR_LOG (testing) always logs.
+// log=1 (the default since 1.0.1) writes the one, full log; log=0 writes nothing. Lines before Configure() are held
+// in memory. GGDPVR_LOG (testing) always logs.
 void Configure(bool enabled);
 bool Enabled();
 std::wstring Directory();  // %LOCALAPPDATA%\GGDPVR

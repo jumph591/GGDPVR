@@ -27,7 +27,7 @@ INSTALL - THE EASY WAY
 4. Start your VR software, then start the game (Steam, or the setup's "Start game" button).
 
 GGDPVR-Setup.exe is also how you repair (for example if a file went missing), switch the mod off and on, open your
-settings and logs, and uninstall. It always keeps your settings.
+settings and logs, turn logging off and on, and uninstall. It always keeps your settings.
 
 
 UPDATING
@@ -169,11 +169,15 @@ PROBLEMS?
   runtime (SteamVR: Settings > OpenXR; Meta Quest Link: Settings > General > OpenXR Runtime).
 - The game is still on the monitor only: check that enabled=1 in ggdpvr.ini and that there is no "disabled" file in
   the GGDPVR folder, then click Repair in GGDPVR-Setup.exe.
-- Reporting a problem: set log=1 in ggdpvr.ini, play until the problem happens, quit, and send the file
-  %LOCALAPPDATA%\GGDPVR\logs\ggdpvr.log with your report (GGDPVR-Setup.exe's "Log folder" button opens it).
+- Reporting a problem: play until the problem happens, quit, and send the file %LOCALAPPDATA%\GGDPVR\logs\ggdpvr.log
+  with your report (the setup's "Log folder" button opens it; ggdpvr.prev.log is the session before). Say which
+  headset and VR software you use, and your operating system if it isn't Windows. If you turned logging off, turn it
+  back on first ("Turn logging on" in the setup, or log=1 in ggdpvr.ini).
 
 
 PRIVACY
 -------
-GGDPVR has no network code: it never connects to the internet and never sends anything anywhere. It writes no log
-unless you turn log=1 on. The log stays on your PC, and it never contains your Windows user name or device names.
+GGDPVR has no network code: it never connects to the internet and never sends anything anywhere. For bug reports it
+keeps a log of the last few game sessions on your PC (%LOCALAPPDATA%\GGDPVR\logs, at most 100 MB per session). The
+log never contains your Windows user name or device names, and it only leaves your PC if you send it yourself.
+"Turn logging off" in GGDPVR-Setup.exe (or log=0 in ggdpvr.ini) stops it.

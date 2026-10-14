@@ -83,15 +83,17 @@ void __fastcall hk_MeshRelease(void* self) {
                 }
             }
         }
-    LOG("[vf] MeshObject %p ReleaseResources thread=%lu lods=%d factories:%s", self, GetCurrentThreadId(), lods.num,
-        list.c_str());
+    if (config::Get().developer)  // every model load / unload: developer logs only
+        LOG("[vf] MeshObject %p ReleaseResources thread=%lu lods=%d factories:%s", self, GetCurrentThreadId(), lods.num,
+            list.c_str());
     o_MeshRelease(self);
 }
 // Per-LOD vertex factory creation (array 0 path, 0x970480). Logs who creates factories and when.
 // Uses rcx, rdx, r8, r9 and one stack argument; forward six to be safe.
 void* __fastcall hk_InitVFs(void* a, void* b, void* c, void* d, void* e, void* f) {
-    LOG("[vf] InitVertexFactories(block=%p, %p, %p, %p) thread=%lu stack: %s", a, b, c, d, GetCurrentThreadId(),
-        StackRvas(1, 12).c_str());
+    if (config::Get().developer)
+        LOG("[vf] InitVertexFactories(block=%p, %p, %p, %p) thread=%lu stack: %s", a, b, c, d, GetCurrentThreadId(),
+            StackRvas(1, 12).c_str());
     return o_InitVFs(a, b, c, d, e, f);
 }
 

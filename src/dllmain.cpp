@@ -22,7 +22,7 @@
 #include "xr/present_hook.h"
 #include "xr/xr_screen.h"
 
-#define GGDPVR_VERSION "1.0.0"
+#define GGDPVR_VERSION "1.0.1"
 
 namespace {
 DWORD g_mainThread = 0;
@@ -49,7 +49,7 @@ DWORD WINAPI InitThread(LPVOID) {
     LOGP("GGDPVR %s starting (game thread %lu)", GGDPVR_VERSION, g_mainThread);
     config::Load(game::ModDir());
     const auto& cfg = config::Get();
-    log::Configure(cfg.logging);  // opt-in: no log unless log=1 (or developer=1)
+    log::Configure(cfg.logging);  // log=0 (and no developer=1): nothing is written
     {  // the settings the player set ([vr] / [debug] keys present in ggdpvr.ini)
         const std::wstring ini = game::ModDir() + L"\\ggdpvr.ini";
         std::string set;
@@ -71,6 +71,26 @@ DWORD WINAPI InitThread(LPVOID) {
     }
     LOG("config: rr_probe=%d rr_trace_lifecycle=%d fix.deferred_cleanup_flush=%d ue3.bootstrap=%d processevent_hook=%d",
         cfg.rrProbe, cfg.rrTraceLifecycle, cfg.fixDeferredCleanupFlush, cfg.ue3Bootstrap, cfg.processEventHook);
+    {  // platform: the Windows version, or Wine / Proton and the host system (Linux players' reports)
+        const HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+        using WineVersionFn = const char*(__cdecl*)();
+        using WineHostFn = void(__cdecl*)(const char**, const char**);
+        OSVERSIONINFOW vi{sizeof vi};
+        if (const auto rv = nt ? reinterpret_cast<RtlGetVersionFn>(GetProcAddress(nt, "RtlGetVersion")) : nullptr) rv(&vi);
+        const auto wv = nt ? reinterpret_cast<WineVersionFn>(GetProcAddress(nt, "wine_get_version")) : nullptr;
+        const auto wh = nt ? reinterpret_cast<WineHostFn>(GetProcAddress(nt, "wine_get_host_version")) : nullptr;
+        if (wv) {
+            const char *sys = nullptr, *rel = nullptr;
+            if (wh) wh(&sys, &rel);
+            // Proton sets STEAM_COMPAT_DATA_PATH (a path under the home folder: only whether it is set is logged)
+            const bool proton = GetEnvironmentVariableW(L"STEAM_COMPAT_DATA_PATH", nullptr, 0) > 0;
+            LOGP("platform: Wine %s%s on %s %s (reports Windows %lu.%lu build %lu)", wv(), proton ? " (Proton)" : "",
+                 sys ? sys : "?", rel ? rel : "?", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber);
+        } else {
+            LOGP("platform: Windows %lu.%lu build %lu", vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber);
+        }
+    }
     if (!game::Init() || !hooks::Init()) return 0;
     const DWORD loaderThread = g_mainThread;
     g_mainThread = game::MainThreadId();

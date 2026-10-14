@@ -15,6 +15,9 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -207,7 +210,7 @@ enum Part { kMissing, kSame, kOther, kForeign };
 struct State {
     bool game = false;
     Part loader = kMissing, mod = kMissing;
-    bool ini = false, disabled = false, foreignBackup = false;
+    bool ini = false, disabled = false, foreignBackup = false, logging = false;
     bool Ours(Part p) const { return p == kSame || p == kOther; }
     bool Any() const { return Ours(loader) || mod != kMissing || ini; }
     bool Complete() const { return Ours(loader) && mod != kMissing && ini; }
@@ -220,6 +223,71 @@ bool IsOurLoader(const std::string& bytes) {
     }
     return false;
 }
+// The mod's log switch, log= in the player's ggdpvr.ini: looked up like the mod does (src\core\config.cpp Sec: the
+// first of [advanced], [vr], [debug] that has the key; on when it is missing - the default since 1.0.1).
+bool LoggingOn(const std::wstring& ini) {
+    for (const wchar_t* sec : {L"advanced", L"vr", L"debug"}) {
+        wchar_t buf[8]{};
+        GetPrivateProfileStringW(sec, L"log", L"\x01", buf, 8, ini.c_str());
+        if (buf[0] != 1) return GetPrivateProfileIntW(sec, L"log", 1, ini.c_str()) != 0;
+    }
+    return true;
+}
+// Sets log= in those sections. Only the value changes - the rest of the file stays byte for byte (no BOM or line
+// ending changes); a file without the key gets "log=" under [vr]. 0 or the Windows error.
+DWORD SetLogging(const std::wstring& ini, bool on) {
+    std::string s;
+    if (!ReadAll(ini, s)) return GetLastError() ? GetLastError() : ERROR_READ_FAULT;
+    const char v = on ? '1' : '0';
+    const auto blank = [&](size_t i) { return s[i] == ' ' || s[i] == '\t'; };
+    std::string sec;
+    size_t vrEnd = std::string::npos;  // just after the [vr] header line
+    bool found = false;
+    std::vector<std::pair<size_t, size_t>> values;
+    for (size_t a = 0; a < s.size();) {
+        size_t b = s.find('\n', a);
+        if (b == std::string::npos) b = s.size();
+        size_t e = b;
+        if (e > a && s[e - 1] == '\r') --e;
+        size_t k = a;
+        while (k < e && blank(k)) ++k;
+        if (k < e && s[k] == '[') {
+            const size_t c = s.find(']', k);
+            sec = c != std::string::npos && c < e ? s.substr(k + 1, c - k - 1) : "";
+            for (auto& ch : sec) ch = char(tolower(static_cast<unsigned char>(ch)));
+            if (sec == "vr") vrEnd = b < s.size() ? b + 1 : b;
+        } else if (k < e && s[k] != ';' && s[k] != '#' && (sec == "advanced" || sec == "vr" || sec == "debug")) {
+            const size_t eq = s.find('=', k);
+            if (eq != std::string::npos && eq < e) {
+                size_t ke = eq;
+                while (ke > k && blank(ke - 1)) --ke;
+                if (ke - k == 3 && _strnicmp(s.c_str() + k, "log", 3) == 0) {
+                    size_t vb = eq + 1, ve = e;
+                    while (vb < e && blank(vb)) ++vb;
+                    while (ve > vb && blank(ve - 1)) --ve;
+                    values.emplace_back(vb, ve);
+                    found = true;
+                }
+            }
+        }
+        a = b + 1;
+    }
+    std::string out = s;
+    for (auto it = values.rbegin(); it != values.rend(); ++it) out.replace(it->first, it->second - it->first, 1, v);
+    if (!found) {
+        // the file's own line ending; Windows' when it has none yet
+        const std::string nl = s.find('\n') != std::string::npos && s.find("\r\n") == std::string::npos ? "\n" : "\r\n";
+        const std::string line = std::string("log=") + v + nl;
+        if (vrEnd != std::string::npos) {
+            if (vrEnd == out.size() && !out.empty() && out.back() != '\n') out += nl, vrEnd = out.size();
+            out.insert(vrEnd, line);
+        } else {
+            if (!out.empty() && out.back() != '\n') out += nl;
+            out += "[vr]" + nl + line;
+        }
+    }
+    return out == s ? 0 : WriteAll(ini, out);
+}
 State Inspect(const std::wstring& game) {
     State s;
     s.game = IsGameDir(game);
@@ -229,6 +297,7 @@ State Inspect(const std::wstring& game) {
     if (ReadAll(Join(win, L"dinput8.dll"), b)) s.loader = !IsOurLoader(b) ? kForeign : b == Res(IDR_LOADER) ? kSame : kOther;
     if (ReadAll(Join(mod, L"GGDPVR.dll"), b)) s.mod = b == Res(IDR_MOD) ? kSame : kOther;
     s.ini = Exists(Join(mod, L"ggdpvr.ini"));
+    s.logging = s.ini && LoggingOn(Join(mod, L"ggdpvr.ini"));
     s.disabled = Exists(Join(mod, L"disabled"));
     s.foreignBackup = Exists(Join(win, kForeignBackup));
     return s;
@@ -331,19 +400,39 @@ std::wstring DocumentsDir() {
     std::wstring d = RegStr(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", L"Personal");
     return d.empty() ? Env(L"USERPROFILE") + L"\\Documents" : d;
 }
+// A resolution no display can show can't be the player's own (the mod's settings_guard.cpp has the same test): 1.0.0
+// could leave the VR render size (e.g. 3640x3782) as the game's resolution.
+bool PlausibleResolution(int w, int h) {
+    if (w <= 0 || h <= 0) return true;
+    int maxW = 0, maxH = 0;
+    bool exact = false;
+    DISPLAY_DEVICEW dd{sizeof dd};
+    for (DWORD d = 0; EnumDisplayDevicesW(nullptr, d, &dd, 0); ++d, dd = {sizeof dd}) {
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+        DEVMODEW dm{};
+        dm.dmSize = sizeof dm;
+        for (DWORD m = 0; EnumDisplaySettingsW(dd.DeviceName, m, &dm); ++m) {
+            maxW = std::max(maxW, int(dm.dmPelsWidth)), maxH = std::max(maxH, int(dm.dmPelsHeight));
+            if (int(dm.dmPelsWidth) == w && int(dm.dmPelsHeight) == h) exact = true;
+        }
+    }
+    if (!maxW || !maxH || exact) return true;
+    return w <= maxW && h <= maxH && h * 10 < w * 9;
+}
 bool RestoreGraphicsSettings(bool& changed) {
     changed = false;
     const std::wstring marker = Join(LocalDir(), L"settings_dirty"), baseline = Join(LocalDir(), L"user_settings_baseline.ini");
-    if (!Exists(marker) || !Exists(baseline)) return true;  // the last VR session ended normally
+    const bool dirty = Exists(marker) && Exists(baseline);  // false: the last VR session ended normally
     const std::wstring live = DocumentsDir() + L"\\My Games\\UnrealEngine3\\GG2Game\\Config\\GG2SystemSettings.ini";
     std::string text, base;
     if (!ReadAll(live, text)) {
-        DeleteFileW(marker.c_str());
+        if (dirty) DeleteFileW(marker.c_str());
         return true;
     }
-    if (!LooksSingleByte(text) || !ReadAll(baseline, base)) return false;
+    if (!LooksSingleByte(text)) return !dirty;
+    if (dirty && !ReadAll(baseline, base)) return false;
     std::string out = text;
-    for (size_t a = 0; a < base.size();) {
+    for (size_t a = 0; dirty && a < base.size();) {
         size_t b = base.find('\n', a);
         if (b == std::string::npos) b = base.size();
         std::string line = base.substr(a, b - a);
@@ -355,11 +444,20 @@ bool RestoreGraphicsSettings(bool& changed) {
         size_t vb, ve;
         if (FindKey(out, key, vb, ve) && out.compare(vb, ve - vb, want) != 0) out.replace(vb, ve - vb, want);
     }
+    {  // a resolution no display has: the game's default instead, so the game without the mod starts normally
+        size_t xb = 0, xe = 0, yb = 0, ye = 0;
+        if (FindKey(out, "ResX", xb, xe) && FindKey(out, "ResY", yb, ye) &&
+            !PlausibleResolution(atoi(out.substr(xb, xe - xb).c_str()), atoi(out.substr(yb, ye - yb).c_str()))) {
+            out.replace(yb, ye - yb, "720");  // positions may shift: ResX is looked up again
+            FindKey(out, "ResX", xb, xe);
+            out.replace(xb, xe - xb, "1280");
+        }
+    }
     if (out != text) {
         if (WriteAll(live, out)) return false;
         changed = true;
     }
-    DeleteFileW(marker.c_str());
+    if (dirty) DeleteFileW(marker.c_str());
     return true;
 }
 
@@ -445,9 +543,9 @@ std::wstring PickFolder(HWND w, const std::wstring& start) {
 // ---- the window ----------------------------------------------------------------------------------------------
 // Everything is drawn by hand with GDI+ in "logical" pixels (96 dpi) and scaled to the monitor.
 using namespace Gdiplus;
-constexpr float kW = 640, kH = 548;
-enum ButtonId { kChange = 1, kPrimary, kPlay, kSettings, kToggle, kLogs, kUninstall };
-enum ButtonKind { kBig, kNormal, kSmall, kLink };
+constexpr float kW = 640, kH = 568;
+enum ButtonId { kChange = 1, kPrimary, kPlay, kSettings, kToggle, kLogs, kLogging, kUninstall };
+enum ButtonKind { kBig, kNormal, kSmall, kLink, kLinkLeft };
 struct Button {
     int id;
     ButtonKind kind;
@@ -493,7 +591,8 @@ void Layout() {
     const wchar_t* names[4] = {L"Start game", L"Settings file", L"Turn mod off", L"Log folder"};
     const int ids[4] = {kPlay, kSettings, kToggle, kLogs};
     for (int i = 0; i < 4; ++i) g_buttons.push_back({ids[i], kNormal, RectF(24 + i * (bw + 10), 440, bw, 42), names[i]});
-    g_buttons.push_back({kUninstall, kLink, RectF(506, 500, 110, 30), L"Uninstall"});
+    g_buttons.push_back({kLogging, kLinkLeft, RectF(24, 496, 420, 30), L"Turn logging on (for bug reports)"});
+    g_buttons.push_back({kUninstall, kLink, RectF(506, 496, 110, 30), L"Uninstall"});
 }
 Button* Find(int id) {
     for (auto& b : g_buttons)
@@ -512,6 +611,8 @@ void Refresh() {
     Find(kToggle)->enabled = s.game && s.Complete();
     Find(kToggle)->text = s.disabled ? L"Turn mod on" : L"Turn mod off";
     Find(kLogs)->enabled = true;
+    Find(kLogging)->enabled = s.game && s.ini;
+    Find(kLogging)->text = s.logging ? L"Logging is on - turn it off" : L"Turn logging on (for bug reports)";
     Find(kUninstall)->enabled = s.game && (s.Any() || s.foreignBackup);
     if (g_wnd) InvalidateRect(g_wnd, nullptr, FALSE);
 }
@@ -541,9 +642,10 @@ void DrawButton(Graphics& g, const Button& b, int index) {
     const bool hover = index == g_hover && b.enabled, down = index == g_pressed && hover;
     RectF r = b.r;
     if (down) r.Offset(0, 1);
-    if (b.kind == kLink) {
+    if (b.kind == kLink || b.kind == kLinkLeft) {
         const Color c = !b.enabled ? Color(255, 176, 160, 176) : hover ? Color(255, 200, 40, 110) : Color(255, 140, 60, 115);
-        Text(g, b.text, r, 14, hover ? FontStyleUnderline : FontStyleRegular, c, StringAlignmentFar, StringAlignmentCenter);
+        Text(g, b.text, r, 14, hover ? FontStyleUnderline : FontStyleRegular, c,
+             b.kind == kLink ? StringAlignmentFar : StringAlignmentNear, StringAlignmentCenter);
     } else {
         GraphicsPath path;
         RoundRect(path, r, b.kind == kBig ? 14.f : 10.f);
@@ -655,7 +757,7 @@ void Paint(HDC hdc) {
     Text(g, detail, RectF(44, 318, 552, 38), 13, FontStyleRegular, g_messageBad ? Color(255, 196, 40, 70) : soft,
          StringAlignmentNear, StringAlignmentNear, false, true);
     for (size_t i = 0; i < g_buttons.size(); ++i) DrawButton(g, g_buttons[i], int(i));
-    Text(g, L"GGDPVR " + kVersion + L"  -  fan-made VR mod for Gal*Gun: Double Peace", RectF(24, 500, 470, 30), 12,
+    Text(g, L"GGDPVR " + kVersion + L"  -  fan-made VR mod for Gal*Gun: Double Peace", RectF(24, 530, 592, 28), 12,
          FontStyleRegular, soft, StringAlignmentNear, StringAlignmentCenter);
     Graphics screen(hdc);
     screen.DrawImage(&buf, 0, 0, w, h);
@@ -735,9 +837,20 @@ void OnClick(int id) {
         case kLogs: {
             const std::wstring logs = Join(LocalDir(), L"logs");
             if (Exists(logs)) ShellExecuteW(g_wnd, L"open", logs.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            else Tell(g_wnd, L"There's no log yet.\n\nThe mod only writes one when you ask it to: open the settings file, set "
-                             L"log=1, save, and play until the problem happens. The log then appears in this folder:\n"
-                             L"%LOCALAPPDATA%\\GGDPVR\\logs");
+            else Tell(g_wnd, L"There's no log yet.\n\nThe mod writes one each time the game runs with logging on (if you "
+                             L"turned it off, click Turn logging on first). Play until the problem happens; the log then "
+                             L"appears in this folder:\n%LOCALAPPDATA%\\GGDPVR\\logs");
+            return;
+        }
+        case kLogging: {
+            const bool on = !g_state.logging;
+            const DWORD e = SetLogging(Join(win, L"GGDPVR\\ggdpvr.ini"), on);
+            g_message = e ? L"Could not change the settings file (Windows error " + std::to_wstring(e) + L")."
+                      : on ? L"Logging is on from the next game start. After the problem happens, quit the game, click Log "
+                             L"folder and send ggdpvr.log."
+                           : L"Logging is off from the next game start - the mod writes no log.";
+            g_messageBad = e != 0;
+            Refresh();
             return;
         }
         default:

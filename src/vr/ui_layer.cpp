@@ -165,8 +165,9 @@ uint64_t g_captures = 0;
 // pipeline, run in a private device-context state so UE3's cached D3D state is untouched
 ID3DDeviceContextState* g_state = nullptr;
 ID3D11VertexShader* g_vs = nullptr;
-ID3D11PixelShader *g_psCombine = nullptr, *g_psComposite = nullptr;
-ID3D11Buffer *g_cbCombine = nullptr, *g_cbComposite = nullptr;
+ID3D11PixelShader *g_psCombine = nullptr, *g_psComposite = nullptr, *g_psMirror = nullptr;
+ID3D11Buffer *g_cbCombine = nullptr, *g_cbComposite = nullptr, *g_cbMirror = nullptr;
+ID3D11BlendState* g_blendAlpha = nullptr;  // desktop mirror's HUD panel: source alpha over the image
 int g_backdrop = 0;  // Collection backdrop this frame: 1 = the background movie on a sphere, 2 = white (profile)
 std::atomic<uint64_t> g_asTraceUntil{0};  // dev: log every ActionScript call until then  // Collection background shown as a backdrop this frame
 ID3D11RasterizerState* g_rs = nullptr;
@@ -755,6 +756,28 @@ float4 Composite(float4 pos : SV_Position) : SV_Target {
     }
     return float4(col, 1);
 }
+
+// desktop_mirror=1: the HUD panel - an OpenXR layer the headset composites, never part of the game's image - drawn into
+// the mirrored eye image after that image went to the headset, where the panel is in this eye. Blended by its alpha
+// over the image as the flat game blends its HUD.
+cbuffer M : register(b1) {
+    float4 mp0;    // panel centre (eye space)
+    float4 mpu;    // half-width vector
+    float4 mpv;    // half-height vector
+    float4 mproj;  // tan(halfH), tan(halfV), image width, height
+};
+float4 MirrorPanel(float4 pos : SV_Position) : SV_Target {
+    float3 d = float3((pos.x / mproj.z * 2 - 1) * mproj.x, (1 - pos.y / mproj.w * 2) * mproj.y, -1);
+    float3 n = cross(mpu.xyz, mpv.xyz);
+    float den = dot(d, n);
+    if (abs(den) < 1e-6) discard;
+    float t = dot(mp0.xyz, n) / den;
+    if (t <= 0) discard;
+    float3 h = t * d - mp0.xyz;
+    float2 uv = float2(dot(h, mpu.xyz) / dot(mpu.xyz, mpu.xyz), dot(h, mpv.xyz) / dot(mpv.xyz, mpv.xyz));
+    if (abs(uv.x) >= 1 || abs(uv.y) >= 1) discard;
+    return UI.SampleLevel(S, float2(uv.x * 0.5 + 0.5, 0.5 - uv.y * 0.5), 0);  // unpremultiplied
+}
 )";
 
 bool CreatePipeline(ID3D11Device* dev) {
@@ -767,7 +790,7 @@ bool CreatePipeline(ID3D11Device* dev) {
         LOG("[ui] d3dcompiler_47.dll / D3DCompile not available");
         return false;
     }
-    ID3DBlob *vs = nullptr, *psA = nullptr, *psB = nullptr, *err = nullptr;
+    ID3DBlob *vs = nullptr, *psA = nullptr, *psB = nullptr, *psC = nullptr, *err = nullptr;
     auto cc = [&](const char* entry, const char* target, ID3DBlob** out) {
         if (SUCCEEDED(compile(kShader, sizeof kShader - 1, "ggdpvr_ui", nullptr, nullptr, entry, target, 0, 0, out, &err)))
             return true;
@@ -775,19 +798,23 @@ bool CreatePipeline(ID3D11Device* dev) {
         SafeRelease(err);
         return false;
     };
-    if (!cc("VS", "vs_4_0", &vs) || !cc("Combine", "ps_4_0", &psA) || !cc("Composite", "ps_4_0", &psB)) {
-        SafeRelease(vs), SafeRelease(psA), SafeRelease(psB);
+    if (!cc("VS", "vs_4_0", &vs) || !cc("Combine", "ps_4_0", &psA) || !cc("Composite", "ps_4_0", &psB) ||
+        !cc("MirrorPanel", "ps_4_0", &psC)) {
+        SafeRelease(vs), SafeRelease(psA), SafeRelease(psB), SafeRelease(psC);
         return false;
     }
-    HRESULT hr[10]{};
+    HRESULT hr[13]{};
     hr[0] = dev->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &g_vs);
     hr[1] = dev->CreatePixelShader(psA->GetBufferPointer(), psA->GetBufferSize(), nullptr, &g_psCombine);
     hr[2] = dev->CreatePixelShader(psB->GetBufferPointer(), psB->GetBufferSize(), nullptr, &g_psComposite);
-    SafeRelease(vs), SafeRelease(psA), SafeRelease(psB);
+    hr[10] = dev->CreatePixelShader(psC->GetBufferPointer(), psC->GetBufferSize(), nullptr, &g_psMirror);
+    SafeRelease(vs), SafeRelease(psA), SafeRelease(psB), SafeRelease(psC);
     D3D11_BUFFER_DESC bd{112, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     hr[3] = dev->CreateBuffer(&bd, nullptr, &g_cbCombine);
     bd.ByteWidth = 736;  // = the Composite cbuffer (46 float4s; grow with it - a short buffer leaves new fields zero)
     hr[4] = dev->CreateBuffer(&bd, nullptr, &g_cbComposite);
+    bd.ByteWidth = 64;  // the MirrorPanel cbuffer (4 float4s)
+    hr[11] = dev->CreateBuffer(&bd, nullptr, &g_cbMirror);
     D3D11_RASTERIZER_DESC rd{};
     rd.FillMode = D3D11_FILL_SOLID, rd.CullMode = D3D11_CULL_NONE, rd.DepthClipEnable = TRUE;
     hr[5] = dev->CreateRasterizerState(&rd, &g_rs);
@@ -800,6 +827,8 @@ bool CreatePipeline(ID3D11Device* dev) {
     bl.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN |
                                                D3D11_COLOR_WRITE_ENABLE_BLUE;
     hr[6] = dev->CreateBlendState(&bl, &g_blendOver);
+    bl.RenderTarget[0].BlendEnable = TRUE, bl.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;  // unpremultiplied HUD
+    hr[12] = dev->CreateBlendState(&bl, &g_blendAlpha);
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -819,10 +848,11 @@ bool CreatePipeline(ID3D11Device* dev) {
     bool ok = true;
     for (HRESULT h : hr) ok = ok && SUCCEEDED(h);
     if (!ok) {
-        LOG("[ui] pipeline creation failed: %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX", hr[0], hr[1],
-            hr[2], hr[3], hr[4], hr[5], hr[6], hr[7], hr[8], hr[9]);
+        LOG("[ui] pipeline creation failed: %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX",
+            hr[0], hr[1], hr[2], hr[3], hr[4], hr[5], hr[6], hr[7], hr[8], hr[9], hr[10], hr[11], hr[12]);
         SafeRelease(g_vs), SafeRelease(g_psCombine), SafeRelease(g_psComposite), SafeRelease(g_cbCombine);
         SafeRelease(g_cbComposite), SafeRelease(g_rs), SafeRelease(g_blendOver), SafeRelease(g_linear);
+        SafeRelease(g_psMirror), SafeRelease(g_cbMirror), SafeRelease(g_blendAlpha);
         SafeRelease(g_state);
         return false;
     }
@@ -3215,5 +3245,56 @@ void KeepScopeViewRT(ID3D11Texture2D* bb, uint64_t frameId) {
         if (s_logs++ < 3) LOG("[ui] zoom scope render kept (frame %llu)", frameId);
     }
     dev->Release();
+}
+
+// desktop_mirror=1: the HUD panel into the eye image that goes on to the desktop window - only after the image was
+// copied to the headset (xr_screen Frame), so the headset still gets the panel as its own layer. Without this the
+// desktop (and recordings of it, e.g. Steam's) showed the world without the HUD.
+void MirrorPanelRT(ID3D11Device* dev, ID3D11Texture2D* bb, const xr::FrameRecord& rec) {
+    if (!g_ui.srv || !g_ui.w || !g_ui.h || rec.halfH <= 0 || rec.halfV <= 0 || !CreatePipeline(dev) || !g_psMirror) return;
+    static ID3D11Texture2D* s_bb = nullptr;
+    static ID3D11RenderTargetView* s_rtv = nullptr;
+    if (bb != s_bb) {  // the backbuffer is recreated on resolution changes
+        SafeRelease(s_rtv);
+        s_bb = SUCCEEDED(dev->CreateRenderTargetView(bb, nullptr, &s_rtv)) ? bb : nullptr;
+        if (!s_bb) return;
+    }
+    D3D11_TEXTURE2D_DESC d{};
+    bb->GetDesc(&d);
+    // the panel exactly as submitted to the headset: its pose, the panel width, the image's aspect (tall in minigames)
+    const XrPosef pp = xr::UiPanelPoseRT();
+    const float pw = PanelWidth(), ph = pw * float(g_ui.h) / float(g_ui.w);
+    const XrVector3f rel{pp.position.x - rec.pose.position.x, pp.position.y - rec.pose.position.y,
+                         pp.position.z - rec.pose.position.z};
+    const XrVector3f c0 = QRotInv(rec.pose.orientation, rel);
+    const XrVector3f cu = QRotInv(rec.pose.orientation, QRot(pp.orientation, {pw / 2, 0, 0}));
+    const XrVector3f cv = QRotInv(rec.pose.orientation, QRot(pp.orientation, {0, ph / 2, 0}));
+    const float cb[16] = {c0.x, c0.y, c0.z, 1, cu.x, cu.y, cu.z, 0, cv.x, cv.y, cv.z, 0,
+                          std::tan(rec.halfH), std::tan(rec.halfV), float(d.Width), float(d.Height)};
+    ID3D11DeviceContext* ctx = nullptr;
+    dev->GetImmediateContext(&ctx);
+    if (!ctx) return;
+    {
+        Pass p(ctx);
+        if (p.ctx1) {
+            p.ctx1->UpdateSubresource(g_cbMirror, 0, nullptr, cb, 0, 0);
+            p.ctx1->PSSetShader(g_psMirror, nullptr, 0);
+            ID3D11ShaderResourceView* ui = g_ui.srv;
+            p.ctx1->PSSetShaderResources(11, 1, &ui);
+            p.ctx1->PSSetConstantBuffers(1, 1, &g_cbMirror);
+            p.ctx1->PSSetSamplers(0, 1, &g_linear);
+            const float factor[4] = {};
+            p.ctx1->OMSetBlendState(g_blendAlpha, factor, 0xFFFFFFFF);
+            D3D11_VIEWPORT vp{0, 0, float(d.Width), float(d.Height), 0, 1};
+            p.ctx1->RSSetViewports(1, &vp);
+            p.ctx1->OMSetRenderTargets(1, &s_rtv, nullptr);
+            p.ctx1->Draw(3, 0);
+            ID3D11ShaderResourceView* none = nullptr;
+            p.ctx1->PSSetShaderResources(11, 1, &none);  // g_ui is drawn into next frame
+        }
+    }
+    ctx->Release();
+    static int s_logs = 0;
+    if (s_logs++ < 1) LOG("[ui] desktop mirror: HUD panel drawn into the mirrored eye image");
 }
 }  // namespace ggdpvr::vr::ui

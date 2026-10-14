@@ -2,6 +2,8 @@
 #include <cstdint>
 
 struct ID3D11Texture2D;
+struct ID3D11Device;
+namespace ggdpvr::xr { struct FrameRecord; }
 
 // Stage 5: UI layer separation.
 // Scaleform (all of GG2's HUD and menus) is drawn by one UE3 render command, FGFxRenderUI, at the end of
@@ -53,4 +55,7 @@ void SetMenuLayers(bool on);  // dev: !menulayers 0|1
 void ToggleRoomDebug();       // dev: !roomdebug             // dev: write each layer texture once (dump_layerN.bmp)
 // Render thread, at the Present of the zoom scope draw (FrameRecord eye 2): keep its image for the eyes' scope circle.
 void KeepScopeViewRT(ID3D11Texture2D* bb, uint64_t frameId);
+// Render thread, desktop_mirror=1: the HUD panel drawn into the eye image going to the desktop window (call only
+// after that image was copied to the headset).
+void MirrorPanelRT(ID3D11Device* dev, ID3D11Texture2D* bb, const xr::FrameRecord& rec);
 }  // namespace ggdpvr::vr::ui

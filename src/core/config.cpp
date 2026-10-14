@@ -156,7 +156,7 @@ void Load(const std::wstring& modDir) {
     v.vrUiFullscreenFovDoki = float(_wtof(Str16(ini, Sec(L"ui_fullscreen_fov_doki"), L"ui_fullscreen_fov_doki", L"0.8").c_str()));
     v.vrUiDokiFlowerBand = float(_wtof(Str16(ini, Sec(L"ui_doki_flower_band"), L"ui_doki_flower_band", L"0").c_str()));
     v.developer = GetPrivateProfileIntW(Sec(L"developer"), L"developer", 0, ini.c_str());
-    v.logging = GetPrivateProfileIntW(Sec(L"log"), L"log", 0, ini.c_str()) != 0 || v.developer;
+    v.logging = GetPrivateProfileIntW(Sec(L"log"), L"log", 1, ini.c_str()) != 0 || v.developer;  // 1.0.1: on by default
     v.vrPerfLog = v.logging;  // 0.9.110: the log always includes the frame-time lines (perf_log retired)
     v.vrTitleLogoOnPanel = GetPrivateProfileIntW(kFixed, L"title_logo_on_panel", 1, ini.c_str());
     v.vrEffectStereo = GetPrivateProfileIntW(kFixed, L"effect_stereo", 1, ini.c_str());
@@ -225,9 +225,10 @@ void Load(const std::wstring& modDir) {
     v.ue3Bootstrap = Bool(ini, L"ue3", L"bootstrap", v.ue3Bootstrap);
     v.ue3DumpReflection = Bool(ini, L"ue3", L"dump_reflection", v.ue3DumpReflection);
     v.processEventHook = Bool(ini, L"ue3", L"processevent_hook", v.processEventHook);
-    v.cursorProbe = Bool(ini, L"ue3", L"cursor_probe", v.cursorProbe);
+    // once-a-second cursor lines and a 15 s script summary: developer logs; a player's log gets the summary each minute
+    v.cursorProbe = Bool(ini, L"ue3", L"cursor_probe", v.developer != 0);
     v.peLogFirstN = GetPrivateProfileIntW(L"ue3", L"pe_log_first_n", v.peLogFirstN, ini.c_str());
-    v.peSummarySeconds = float(GetPrivateProfileIntW(L"ue3", L"pe_summary_seconds", 15, ini.c_str()));
+    v.peSummarySeconds = float(GetPrivateProfileIntW(L"ue3", L"pe_summary_seconds", v.developer ? 15 : 60, ini.c_str()));
     std::stringstream ss(Str(ini, L"ue3", L"pe_log_filters",
                              L"GG2Camera,Camera.UpdateCamera,GetBaseFov,GetGameFov,SetCameraBaseRotation,"
                              L"CalcUpdatePlayerPose,UpdateRotation,PostRender,GFxMoviePlayer.Start,"

@@ -98,7 +98,7 @@ struct Values {
     int vrFrameHoldSlots = 0;          // 0.9.81: hold every frame this many display slots, any refresh (2 = half rate; 0 = off)
     float vrFrameLockHz = 0.f;         // even cadence: hold every frame for the same number of display slots (0 = off)
     int vrDesktopMirror = 0;           // 1: the right eye still goes to the desktop window (0 = no desktop presents in VR)
-    int logging = 0;                   // 0.9.104: log=1 - write the log (developer=1 also logs)
+    int logging = 1;                   // log=1 (default since 1.0.1) - write the log (developer=1 also logs)
     int developer = 0;                 // 0.9.101: [debug] developer=1 - developer console, F-key hotkeys, dumps (development only)
     int vrPerfLog = 0;                 // [perf] lines every 5 s: frame rate, CPU / GPU time per eye
     int vrImmersiveLoading = 1;        // loading screens in VR scenes: their background colour all around, the rest on the panel

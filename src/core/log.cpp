@@ -16,8 +16,8 @@ namespace {
 FILE* g_file = nullptr;
 std::mutex g_mutex;
 LARGE_INTEGER g_freq{}, g_start{};
-// Logging is opt-in ([debug] debug=1; 0.9.102: one log, the full one). Until the config is read the lines are held in
-// memory (g_early); then they are written out, or dropped and nothing is ever written.
+// Logging follows log= (on by default since 1.0.1; one log, the full one). Until the config is read the lines are held
+// in memory (g_early); then they are written out, or dropped and nothing is ever written.
 enum State { kPending = 0, kOn = 1, kOff = 2 };
 std::atomic<int> g_state{kPending};
 std::vector<std::string> g_early;
@@ -116,6 +116,16 @@ void Write(const char* fmt, ...) {
     if (st != kOn) return;
     OutputDebugStringA(line);
     if (g_file) {
+        // size cap: a long session must not fill the disk (a player's log grows ~1-2 MB per hour)
+        constexpr size_t kMaxBytes = 100u << 20;
+        static size_t s_bytes = 0;
+        if (s_bytes >= kMaxBytes) return;
+        s_bytes += strlen(line);
+        if (s_bytes >= kMaxBytes) {
+            snprintf(line, sizeof line, "[%9.3f][%5lu] log size limit (100 MB) reached: nothing more is written this session\n", t,
+                     GetCurrentThreadId());
+            s_bytes = kMaxBytes;
+        }
         fputs(line, g_file);
         fflush(g_file);
     }

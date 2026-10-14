@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.1
+
+- **Stages staying flat after a loading screen on some VR runtimes** (seen with WiVRn on Linux): the head pose was
+  asked for the time of the last 3D frame, seconds old after a long load, and runtimes that give no pose that far
+  back never let 3D start again - the stage stayed on the flat screen and shots missed. The pose is now asked for
+  the current frame.
+- **Your graphics settings could be replaced by the mod's VR values** (resolution, motion blur, anti-aliasing,
+  shadows) when the game's settings file didn't exist yet as the mod started, e.g. the first launch after installing
+  the game. The startup logos then showed as a squeezed square. The mod now guards the file as soon as the game
+  creates it, and a resolution no display has (a VR render size) is put back to the game's default 1280x720.
+  If your motion blur, anti-aliasing or shadows look different in the flat game, set them again in the game's
+  options once.
+- **Desktop mirror shows the HUD**: with `desktop_mirror=1` the desktop window (and recordings of it, e.g. Steam's)
+  now has the HUD panel where you see it in the headset.
+- **Logging is on by default**, so a problem's log already exists when you report it. It stays on your PC (the last
+  8 sessions, at most 100 MB each). *Turn logging off* / *on* in `GGDPVR-Setup.exe`, or `log=` in `ggdpvr.ini`.
+  Updating keeps your own setting.
+- Better logs for bug reports: why 3D is off when it is (flat scene, no head pose, ...), the platform (Windows, or
+  Wine / Proton on Linux), less noise.
+- Controls in the README are listed for each part of the game.
+
 ## 1.0.0 - first public release
 
 Everything below came together over the 0.x development builds; this is the first release for everyone.

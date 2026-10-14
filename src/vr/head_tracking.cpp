@@ -1267,10 +1267,30 @@ void __fastcall hk_VpDraw(void* viewport, uint32_t present) {
     EngineSmoothingTick(ok && mode == 2 && (xr::Running() || g_fakeHead.load() != 0));
     xr::SetImmersiveScene(immersive);
     g_inFinalDoki = immersive && g_lastGameClass.find("GG2DokiSp") != std::string::npos;
+    const bool posed = ok;  // a VR scene with a head pose
     if (ok && !RenderSizeSettled()) {  // VR resize still pending: show the flat screen until it lands
         ok = false;
         static uint64_t s_waitLogs = 0;
         if (s_waitLogs++ % 300 == 0) LOG("[vr] waiting for the VR render size before starting stereo");
+    }
+    {  // one line whenever stereo starts or stops, with the reason - a player's log shows at once why a scene was flat
+        static int s_why = -1, s_lines = 0;
+        static ULONGLONG s_since = 0;
+        const bool live = xr::Running() || g_fakeHead.load() != 0;
+        const int why = ok ? 0 : !immersive ? 1 : !live ? 2 : !posed ? 3 : 4;
+        if (why != s_why) {
+            static const char* const kWhy[] = {"on", "off: flat scene (virtual screen)", "off: the headset session is not running",
+                                               "off: no head pose from the runtime", "off: waiting for the VR render size"};
+            const ULONGLONG now = GetTickCount64();
+            if (s_lines < 400) {  // a flapping state stops logging here (the [xr] frame lines still count stereo frames)
+                ++s_lines;
+                if (s_why > 0 && why == 0)
+                    LOG("[vr] stereo on (was %s for %.1f s)", kWhy[s_why] + 5, double(now - s_since) / 1000.0);
+                else
+                    LOG("[vr] stereo %s in %s", kWhy[why], g_lastGameClass.c_str());
+            }
+            s_why = why, s_since = now;
+        }
     }
     if (ok) ClearAspectConstraint();
     if (ok) {

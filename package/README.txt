@@ -50,25 +50,79 @@ INSTALL - BY HAND
 3. Start your VR software, then start the game from Steam as usual.
 
 
-CONTROLS (VR controllers; you can change all of them, see SETTINGS)
---------------------------------------------------------------------
-The controls below are for a right-handed player on Meta Quest controllers. Left-handed: set dominant_hand=left,
-and the trigger and grip controls swap hands.
-  Aim ............................ point your right controller
-  Pheromone shot (X) ............. right trigger (hold to charge). In menus it clicks what you point at.
-  Zoom (RB) ...................... right grip
-  Sight speed (LB) ............... left grip
-  Special requests (RT) .......... left trigger
-  Doki-Doki Mode (Y) ............. Y
-  Mom is coming! (BACK) .......... X
-  Confirm (A) / Cancel (B) ....... A / B
-  Pause (START) .................. left menu button
-  Hide / show the HUD ............ B, during stages and boss fights
-  Menus and route choice ......... left thumbstick (D-pad); right thumbstick scrolls lists
+CONTROLS
+--------
+What each button does in each part of the game. These are the defaults for a right-handed player on Meta Quest
+controllers. Left-handed (dominant_hand=left): the triggers, grips and thumbsticks swap hands; A, B, X and Y stay
+where they are. Every button can be changed in the settings file's [controls] section (see SETTINGS).
+
+Everywhere
+  Pause .......................... left menu button
   Re-center the view ............. press the left thumbstick down (your headset's own re-center works too)
-Other controllers (Valve Index, Windows Mixed Reality, HTC Vive, HP Reverb G2) work too - the settings file explains
-where their buttons are. To play with a gamepad or mouse and keyboard while still seeing the game in VR, set
-controllers=0 in the settings file.
+
+Stages and boss battles
+  Aim ............................ point your right controller
+  Pheromone shot ................. right trigger; hold it to charge a stronger shot
+  Zoom (see through obstacles) ... right grip, hold
+  Start Doki-Doki Mode ........... Y (needs at least one full Heart Gauge)
+  Mom is coming! ................. X
+  Choose your route at arrows .... left thumbstick
+  Hide / show the HUD ............ B
+  Sight speed .................... left grip (the game's setting for moving the sight with a stick: no effect
+                                   when you aim with the controller)
+  In boss battles, the "!" markers of a boss's special attack are shot like everything else.
+
+Doki-Doki Mode (in a stage)
+  Choose a girl .................. point at the marker on her, right trigger
+  Touch her gently ............... tap the right trigger
+  Rub ............................ hold the right trigger down
+  Change the camera angle ........ left / right grip (more cameras are sold in the Academy Store)
+  Euphoria ....................... Y
+
+Final Doki-Doki Mode (end of a route)
+  Aim at a spot (head, chest...) . point your right controller
+  Zoom in and shoot .............. hold the right grip to zoom in, let go to shoot
+  Quick shot, without zooming .... right trigger
+  Euphoria (her gauge full) ...... Y
+
+Minigames (the HUD panel moves up and down with your gaze)
+  Targets ........................ shoot the hidden targets all over her before the time runs out - they show
+                                   inside your sight's circle: right trigger
+  Special requests ............... heart icons under the Satisfaction Gauge mean she wants something: follow her
+                                   voice to the request icon on her body. Point at it so it shows inside your
+                                   sight's circle, then use the right grip: tap = poke, hold and move your
+                                   hand = rub, hold still = hold, hold and swipe = flick
+  Hands-on ....................... when the Satisfaction Gauge is full, repeat the on-screen commands as fast
+                                   as you can: hold the right grip or either trigger and move your hand the way
+                                   the game shows (drag up / down, circle, scratch)
+                                   ...or with the thumbsticks: circles and scratching with the right stick,
+                                   the two-handed up / down drags with either stick
+
+Menus, the hub and story scenes (the pointer stays on a menu while it is up, wherever you point)
+  Click what you point at ........ right trigger
+  Confirm / back ................. A / B
+  Move through a menu ............ left thumbstick
+  Scroll long lists .............. right thumbstick
+                                   (pause menu, Continue and results screens: moves through the items)
+  Switch tabs .................... left / right grip, in menus that have them
+  Story scenes: next line ........ right trigger or A
+
+Collection, Dressing Room and the story game-over screen
+  Turn the camera ................ right thumbstick
+Collection - Fantasize
+  Move the camera ................ left thumbstick
+  Tilt ........................... right thumbstick
+  Glasses ........................ press the right thumbstick down
+  Pose ........................... A
+  Doki-Doki ...................... Y
+  Zoom in and out ................ left / right grip (you move closer to her or back)
+  Reset the zoom ................. both grips
+  Touch .......................... left trigger
+  Back ........................... B
+
+Other controllers (Valve Index, Windows Mixed Reality, HTC Vive, HP Reverb G2, Steam Frame) work too - the settings
+file explains where their buttons are. To play with a gamepad or mouse and keyboard while still seeing the game in VR,
+set controllers=0 in the settings file.
 
 Quest / Rift controllers through SteamVR (Steam Link, Virtual Desktop in SteamVR mode, Link + SteamVR): SteamVR
 uses the left menu button for its own menu, so Pause needs another button. In the settings file's [controls]

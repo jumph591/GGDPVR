@@ -72,22 +72,94 @@ No game file is replaced. When updating by hand, keep your own `ggdpvr.ini`.
 
 ## Controls
 
-Right-handed player on Meta Quest controllers (left-handed: set `dominant_hand=left`).
+What each button does in each part of the game. These are the defaults for a right-handed player on **Meta Quest
+controllers**. Left-handed (`dominant_hand=left`): the triggers, grips and thumbsticks swap hands; A, B, X and Y stay
+where they are. Every button can be changed in the `[controls]` section of the settings file.
 
-| Action | Button |
+### Everywhere
+
+| What | Button |
+|---|---|
+| Pause | left menu button (☰) |
+| Re-center the view (your headset's own re-center works too) | press the left thumbstick down |
+
+### Stages and boss battles
+
+| What | Button |
 |---|---|
 | Aim | point your right controller |
-| Pheromone shot (X) | right trigger (hold to charge) - in menus it clicks what you point at |
-| Zoom (RB) | right grip |
-| Sight speed (LB) | left grip |
-| Special requests (RT) | left trigger |
-| Doki-Doki Mode (Y) | Y |
-| Mom is coming! (BACK) | X |
-| Confirm (A) / Cancel (B) | A / B |
-| Pause (START) | left menu button |
-| Hide / show the HUD | B, during stages and boss battles |
-| Menus and route choice | left thumbstick; right thumbstick scrolls lists |
-| Re-center the view | press the left thumbstick (your headset's own re-center works too) |
+| Pheromone shot - hold it to charge a stronger shot | right trigger |
+| Zoom - hold it to see through obstacles | right grip |
+| Start Doki-Doki Mode (needs at least one full Heart Gauge) | Y |
+| Mom is coming! (the quick-hide screen) | X |
+| Choose your route at the arrows | left thumbstick |
+| Hide / show the HUD, to see a girl up close | B |
+| Sight speed - the game's setting for moving the sight with a stick: no effect when you aim with the controller | left grip |
+
+In boss battles, the "!" markers of a boss's special attack are shot like everything else: point and pull the trigger.
+
+### Doki-Doki Mode (in a stage)
+
+| What | Button |
+|---|---|
+| Choose a girl: point at the marker on her and pull the trigger | right trigger |
+| Touch her gently: tap | right trigger |
+| Rub: hold it down | right trigger |
+| Change the camera angle (more cameras are sold in the Academy Store) | left / right grip |
+| Euphoria | Y |
+
+### Final Doki-Doki Mode (end of a route)
+
+| What | Button |
+|---|---|
+| Aim at a spot (head, chest, ...) | point your right controller |
+| Zoom in and shoot: hold to zoom in, let go to shoot | right grip |
+| Quick shot, without zooming | right trigger |
+| Euphoria, when her gauge is full | Y |
+
+### Minigames
+
+The HUD panel moves up and down with your gaze, so it is always where you look.
+
+| What | Button |
+|---|---|
+| **Targets:** shoot the hidden targets all over her before the time runs out - they show inside your sight's circle | right trigger |
+| **Special requests:** heart icons under the Satisfaction Gauge mean she wants something - follow her voice to the request icon on her body. Point at it so it shows inside your sight's circle, then tap to poke, hold and move your hand to rub, hold still to hold, or hold and swipe to flick | right grip |
+| **Hands-on:** when the Satisfaction Gauge is full, repeat the on-screen commands as fast as you can - hold and move your hand the way the game shows (drag up / down, circle, scratch) | right grip, or either trigger |
+| ...or do the hands-on commands with the thumbsticks: circles and scratching with the right stick, the two-handed up / down drags with either stick | thumbsticks |
+
+### Menus, the hub and story scenes
+
+The pointer stays on a menu while it is up, wherever the controller points.
+
+| What | Button |
+|---|---|
+| Click what you point at | right trigger |
+| Confirm / back | A / B |
+| Move through a menu | left thumbstick |
+| Scroll long lists (in the pause menu, Continue and results screens it moves through the items instead) | right thumbstick |
+| Switch tabs, in menus that have them | left / right grip |
+| Story scenes: next line | right trigger or A |
+
+### Collection, Dressing Room and the story game-over screen
+
+| What | Button |
+|---|---|
+| Turn the camera | right thumbstick |
+
+In the Collection's *Fantasize*:
+
+| What | Button |
+|---|---|
+| Move the camera | left thumbstick |
+| Tilt | right thumbstick |
+| Glasses | press the right thumbstick down |
+| Pose | A |
+| Doki-Doki | Y |
+| Zoom in and out - you move closer to her or back | left / right grip |
+| Reset the zoom | both grips |
+| Touch | left trigger |
+| Back | B |
 
 Valve Index, HTC Vive, Windows Mixed Reality, HP Reverb G2 and Steam Frame controllers are supported too - the settings
 file explains where their buttons are. To play with a gamepad or mouse and keyboard while still seeing the game in VR,

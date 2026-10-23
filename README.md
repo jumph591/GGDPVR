@@ -14,6 +14,9 @@ menus float on a panel in front of you.
 It works with any headset that supports OpenXR - Meta Quest (Link / Air Link), SteamVR headsets, Virtual Desktop,
 Windows Mixed Reality, Pimax and others.
 
+More mods, including a VR texture fix for DarkhawkZer02's Winter Passion mod pack (base game version), are listed at
+**[jumph591.github.io](https://jumph591.github.io/)**.
+
 ## Features
 
 - **Stereo 3D with head tracking** in stages, boss battles, minigames, cutscenes, the title screen, the hub, the

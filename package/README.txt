@@ -26,8 +26,8 @@ INSTALL - THE EASY WAY
 3. Click Install.
 4. Start your VR software, then start the game (Steam, or the setup's "Start game" button).
 
-GGDPVR-Setup.exe is also how you repair (for example if a file went missing), switch the mod off and on, open your
-settings and logs, turn logging off and on, and uninstall. It always keeps your settings.
+GGDPVR-Setup.exe is also how you repair (for example if a file went missing), switch the mod off and on, change your
+settings, open your logs, turn logging off and on, and uninstall. It always keeps your settings.
 
 
 UPDATING
@@ -54,11 +54,14 @@ CONTROLS
 --------
 What each button does in each part of the game. These are the defaults for a right-handed player on Meta Quest
 controllers. Left-handed (dominant_hand=left): the triggers, grips and thumbsticks swap hands; A, B, X and Y stay
-where they are. Every button can be changed in the settings file's [controls] section (see SETTINGS).
+where they are. Every button can be changed under Button mapping in GGDPVR-Setup.exe's Settings, which also has this
+whole list, showing your own buttons.
 
 Everywhere
   Pause .......................... left menu button
   Re-center the view ............. press the left thumbstick down (your headset's own re-center works too)
+  Turn (Snap turning, in stages) . left thumbstick left / right
+  Face where the game is looking . pull the left thumbstick back (Snap turning, in stages)
 
 Stages and boss battles
   Aim ............................ point your right controller
@@ -132,8 +135,10 @@ section set, for example, pause=main.stick_click - or rebind it in SteamVR's con
 
 SETTINGS
 --------
-All settings are in one file: Binaries\Win64\GGDPVR\ggdpvr.ini in the game folder. Open it with Notepad. Every
-option is explained there and shows its default. Save the file, and the changes apply the next time you start the
+Click Settings in GGDPVR-Setup.exe: pages of options, each with a small animated demonstration of what it does, plus
+button mapping and the full list of controls.
+Everything is saved in one file: Binaries\Win64\GGDPVR\ggdpvr.ini in the game folder. You can also open it with
+Notepad; every option is explained there and shows its default. Changes apply the next time you start the
 game. The everyday options come first: the HUD panel's size and distance, weak-spot pop-up size, comfort options,
 performance, then the controller buttons ([controls]), then [advanced] for fine-tuning.
 To go back to the default settings: delete ggdpvr.ini, then click Repair in GGDPVR-Setup.exe.

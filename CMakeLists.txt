@@ -53,6 +53,8 @@ add_library(GGDPVR SHARED
     src/xr/present_hook.cpp
     src/xr/xr_screen.cpp
     src/vr/head_tracking.cpp
+    src/vr/comfort_turn.cpp
+    src/vr/indicators.cpp
     src/vr/render_res.cpp
     src/vr/ui_layer.cpp
     src/fix/fix_shader_nan.cpp
@@ -83,4 +85,4 @@ target_link_libraries(GGDPVR-Setup PRIVATE gdiplus shlwapi ole32 shell32 uuid)
 target_link_options(GGDPVR-Setup PRIVATE /DEPENDENTLOADFLAG:0x800)
 add_dependencies(GGDPVR-Setup dinput8 GGDPVR)
 set_source_files_properties(package/setup_app/setup.rc PROPERTIES OBJECT_DEPENDS
-    "${CMAKE_BINARY_DIR}/dinput8.dll;${CMAKE_BINARY_DIR}/GGDPVR.dll;${CMAKE_SOURCE_DIR}/config/ggdpvr.ini;${CMAKE_SOURCE_DIR}/package/setup_app/res/logo.png;${CMAKE_SOURCE_DIR}/package/setup_app/res/app.ico")
+    "${CMAKE_BINARY_DIR}/dinput8.dll;${CMAKE_BINARY_DIR}/GGDPVR.dll;${CMAKE_SOURCE_DIR}/config/ggdpvr.ini;${CMAKE_SOURCE_DIR}/package/setup_app/res/logo.png;${CMAKE_SOURCE_DIR}/package/setup_app/res/app.ico;${CMAKE_SOURCE_DIR}/package/setup_app/res/girl.png;${CMAKE_SOURCE_DIR}/package/setup_app/res/kiss.png;${CMAKE_SOURCE_DIR}/package/setup_app/res/shoe.png")

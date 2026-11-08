@@ -22,7 +22,7 @@
 #include "xr/present_hook.h"
 #include "xr/xr_screen.h"
 
-#define GGDPVR_VERSION "1.0.1"
+#define GGDPVR_VERSION "1.1.0"
 
 namespace {
 DWORD g_mainThread = 0;
@@ -146,7 +146,7 @@ DWORD WINAPI InitThread(LPVOID) {
         if (d3d11 && cfg.d3d11DisableMotionBlur) ue3::console::Enqueue("scale set MotionBlur False");
         if (d3d11 && cfg.d3d11MsaaSamples > 0)
             ue3::console::Enqueue("scale set MaxMultiSamples " + std::to_string(cfg.d3d11MsaaSamples));
-        // [vr] dynamic_shadows=0: the moving shadows off in VR (~2 ms of GPU per stereo frame in stages - headset test:
+        // [vr] dynamic_shadows=0: the moving shadows off in VR (~2 ms of GPU per stereo frame in stages:
         // a locked 72 fps without them); the user's own setting comes back on exit (settings_guard)
         if (d3d11 && cfg.vrEnabled && !cfg.vrDynamicShadows) ue3::console::Enqueue("scale set DynamicShadows False");
         // VSync off in VR (0.9.97): with the desktop mirror on it would tie the headset's frames to the monitor; the

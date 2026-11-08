@@ -5,3 +5,6 @@
 #define IDR_MOD 102     // GGDPVR.dll - the mod
 #define IDR_INI 103     // ggdpvr.ini - default settings
 #define IDR_LOGO 104    // logo.png - Gal*Gun: Double Peace logo with the VR mark
+#define IDR_GIRL 105    // girl.png, kiss.png, shoe.png - the settings screen's demonstrations
+#define IDR_KISS 106
+#define IDR_SHOE 107

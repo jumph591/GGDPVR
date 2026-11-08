@@ -6,6 +6,7 @@
 //   GGDPVR-Setup.exe                                                        the window
 //   GGDPVR-Setup.exe --op install|uninstall [--game-dir "<folder>"] [--yes]  no window (--yes: default answers,
 //                                                                           no messages); exit code 0 = done
+//   GGDPVR-Setup.exe --settings-shot "<folder>"                             (dev) every settings page and demo as PNGs
 #include <windows.h>
 #include <objidl.h>
 #include <shellapi.h>
@@ -16,8 +17,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -233,15 +236,14 @@ bool LoggingOn(const std::wstring& ini) {
     }
     return true;
 }
-// Sets log= in those sections. Only the value changes - the rest of the file stays byte for byte (no BOM or line
-// ending changes); a file without the key gets "log=" under [vr]. 0 or the Windows error.
-DWORD SetLogging(const std::wstring& ini, bool on) {
+// Sets key= in those sections. Only the value changes - the rest of the file stays byte for byte (no BOM or line
+// ending changes); a file without the key gets the line under [section] (made if missing). 0 or the Windows error.
+DWORD SetIniValue(const std::wstring& ini, const std::string& key, const std::string& v, const std::string& section) {
     std::string s;
     if (!ReadAll(ini, s)) return GetLastError() ? GetLastError() : ERROR_READ_FAULT;
-    const char v = on ? '1' : '0';
     const auto blank = [&](size_t i) { return s[i] == ' ' || s[i] == '\t'; };
     std::string sec;
-    size_t vrEnd = std::string::npos;  // just after the [vr] header line
+    size_t vrEnd = std::string::npos;  // just after the [section] header line
     bool found = false;
     std::vector<std::pair<size_t, size_t>> values;
     for (size_t a = 0; a < s.size();) {
@@ -255,13 +257,13 @@ DWORD SetLogging(const std::wstring& ini, bool on) {
             const size_t c = s.find(']', k);
             sec = c != std::string::npos && c < e ? s.substr(k + 1, c - k - 1) : "";
             for (auto& ch : sec) ch = char(tolower(static_cast<unsigned char>(ch)));
-            if (sec == "vr") vrEnd = b < s.size() ? b + 1 : b;
-        } else if (k < e && s[k] != ';' && s[k] != '#' && (sec == "advanced" || sec == "vr" || sec == "debug")) {
+            if (sec == section) vrEnd = b < s.size() ? b + 1 : b;
+        } else if (k < e && s[k] != ';' && s[k] != '#' && (sec == "advanced" || sec == "vr" || sec == "debug" || sec == section)) {
             const size_t eq = s.find('=', k);
             if (eq != std::string::npos && eq < e) {
                 size_t ke = eq;
                 while (ke > k && blank(ke - 1)) --ke;
-                if (ke - k == 3 && _strnicmp(s.c_str() + k, "log", 3) == 0) {
+                if (ke - k == key.size() && _strnicmp(s.c_str() + k, key.c_str(), key.size()) == 0) {
                     size_t vb = eq + 1, ve = e;
                     while (vb < e && blank(vb)) ++vb;
                     while (ve > vb && blank(ve - 1)) --ve;
@@ -273,21 +275,22 @@ DWORD SetLogging(const std::wstring& ini, bool on) {
         a = b + 1;
     }
     std::string out = s;
-    for (auto it = values.rbegin(); it != values.rend(); ++it) out.replace(it->first, it->second - it->first, 1, v);
+    for (auto it = values.rbegin(); it != values.rend(); ++it) out.replace(it->first, it->second - it->first, v);
     if (!found) {
         // the file's own line ending; Windows' when it has none yet
         const std::string nl = s.find('\n') != std::string::npos && s.find("\r\n") == std::string::npos ? "\n" : "\r\n";
-        const std::string line = std::string("log=") + v + nl;
+        const std::string line = key + "=" + v + nl;
         if (vrEnd != std::string::npos) {
             if (vrEnd == out.size() && !out.empty() && out.back() != '\n') out += nl, vrEnd = out.size();
             out.insert(vrEnd, line);
         } else {
             if (!out.empty() && out.back() != '\n') out += nl;
-            out += "[vr]" + nl + line;
+            out += "[" + section + "]" + nl + line;
         }
     }
     return out == s ? 0 : WriteAll(ini, out);
 }
+DWORD SetLogging(const std::wstring& ini, bool on) { return SetIniValue(ini, "log", on ? "1" : "0", "vr"); }
 State Inspect(const std::wstring& game) {
     State s;
     s.game = IsGameDir(game);
@@ -544,6 +547,7 @@ std::wstring PickFolder(HWND w, const std::wstring& start) {
 // Everything is drawn by hand with GDI+ in "logical" pixels (96 dpi) and scaled to the monitor.
 using namespace Gdiplus;
 constexpr float kW = 640, kH = 568;
+bool g_settings = false;  // the settings screen is up (settings_panel.inl)
 enum ButtonId { kChange = 1, kPrimary, kPlay, kSettings, kToggle, kLogs, kLogging, kUninstall };
 enum ButtonKind { kBig, kNormal, kSmall, kLink, kLinkLeft };
 struct Button {
@@ -588,7 +592,7 @@ void Layout() {
     g_buttons.push_back({kChange, kSmall, RectF(500, 238, 96, 32), L"Change..."});
     g_buttons.push_back({kPrimary, kBig, RectF(24, 372, 592, 56), L"Install"});
     const float bw = (592 - 3 * 10) / 4.f;
-    const wchar_t* names[4] = {L"Start game", L"Settings file", L"Turn mod off", L"Log folder"};
+    const wchar_t* names[4] = {L"Start game", L"Settings", L"Turn mod off", L"Log folder"};
     const int ids[4] = {kPlay, kSettings, kToggle, kLogs};
     for (int i = 0; i < 4; ++i) g_buttons.push_back({ids[i], kNormal, RectF(24 + i * (bw + 10), 440, bw, 42), names[i]});
     g_buttons.push_back({kLogging, kLinkLeft, RectF(24, 496, 420, 30), L"Turn logging on (for bug reports)"});
@@ -677,7 +681,11 @@ void DrawButton(Graphics& g, const Button& b, int index) {
     }
 }
 
-void Paint(HDC hdc) {
+void SizeWindow(HWND w);
+#include "settings_panel.inl"
+
+void Paint(HDC hdc, const RECT& dirty) {
+    if (g_settings) return PaintSettings(hdc, dirty);
     RECT rc;
     GetClientRect(g_wnd, &rc);
     const int w = rc.right, h = rc.bottom;
@@ -817,11 +825,9 @@ void OnClick(int id) {
             if (IsSteamCopy(g_game)) ShellExecuteW(g_wnd, L"open", L"steam://rungameid/511740", nullptr, nullptr, SW_SHOWNORMAL);
             else ShellExecuteW(g_wnd, L"open", Join(win, L"GG2Game.exe").c_str(), nullptr, win.c_str(), SW_SHOWNORMAL);
             return;
-        case kSettings: {
-            const std::wstring arg = L"\"" + Join(win, L"GGDPVR\\ggdpvr.ini") + L"\"";
-            ShellExecuteW(g_wnd, L"open", L"notepad.exe", arg.c_str(), nullptr, SW_SHOWNORMAL);
+        case kSettings:
+            OpenSettings();
             return;
-        }
         case kToggle: {
             const std::wstring off = Join(win, L"GGDPVR\\disabled");
             DWORD e = 0;
@@ -864,11 +870,12 @@ void SetScaleForDpi(UINT dpi) {
 }
 
 LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
+    if (g_settings && SettingsMessage(msg, wp, lp)) return 0;
     switch (msg) {
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(w, &ps);
-            Paint(hdc);
+            Paint(hdc, ps.rcPaint);
             EndPaint(w, &ps);
             return 0;
         }
@@ -953,7 +960,7 @@ LRESULT CALLBACK WndProc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
 void SizeWindow(HWND w) {
     const UINT dpi = GetDpiForWindow(w);
     SetScaleForDpi(dpi);
-    RECT r{0, 0, LONG(kW * g_scale + 0.5f), LONG(kH * g_scale + 0.5f)};
+    RECT r{0, 0, LONG((g_settings ? kSW : kW) * g_scale + 0.5f), LONG((g_settings ? kSH : kH) * g_scale + 0.5f)};
     const DWORD style = DWORD(GetWindowLongW(w, GWL_STYLE)), ex = DWORD(GetWindowLongW(w, GWL_EXSTYLE));
     AdjustWindowRectExForDpi(&r, style, FALSE, ex, dpi);
     MONITORINFO mi{sizeof mi};
@@ -970,10 +977,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::wstring op, dir;
+    std::wstring op, dir, shots;
     for (int i = 1; i < argc; ++i) {
         const std::wstring a = argv[i];
         if (a == L"--op" && i + 1 < argc) op = argv[++i];
+        else if (a == L"--settings-shot" && i + 1 < argc) shots = argv[++i];
         else if (a == L"--game-dir" && i + 1 < argc) dir = argv[++i];
         else if (a == L"--yes") g_yes = true;
     }
@@ -996,6 +1004,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     GdiplusStartupInput gsi;
     ULONG_PTR token = 0;
     GdiplusStartup(&token, &gsi, nullptr);
+    if (!shots.empty()) {
+        g_game = DetectGame();
+        SettingsShots(shots);
+        ReleaseSettingsArt();
+        GdiplusShutdown(token);
+        return 0;
+    }
     g_logo = LoadPng(IDR_LOGO);
     Layout();
 
@@ -1021,6 +1036,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
     g_logoScaled.reset();
     delete g_logo;
+    ReleaseSettingsArt();
     GdiplusShutdown(token);
     CoUninitialize();
     return 0;

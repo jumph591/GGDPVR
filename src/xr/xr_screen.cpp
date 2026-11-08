@@ -395,7 +395,7 @@ FrameRecord g_rec;          // last record delivered by render command
 ID3D11Texture2D* g_uiTex = nullptr;  // UI layer image (owned by the UI layer module)
 std::atomic<float> g_uiPanelW{0.f};
 std::atomic<bool> g_immersiveScene{false};  // the game is in a VR scene (game thread; kept through blocking loads)
-std::atomic<float> g_uiPanelDrop{0.f};  // metres below the recentered panel place  // the panel quad's width (metres; 0 = ui_width)
+std::atomic<float> g_uiPanelElev{0.f};  // radians up about the recentered head  // the panel quad's width (metres; 0 = ui_width)
 uint64_t g_uiFrame = ~0ull;
 bool g_recFresh = false;    // a record arrived since the last Present
 struct OpenStereo {
@@ -1320,7 +1320,14 @@ bool CurrentRecordRT(FrameRecord& out) {
 }
 XrPosef UiPanelPoseRT() {
     XrPosef p = s.uiPose;
-    p.position.y -= g_uiPanelDrop.load();
+    const float e = g_uiPanelElev.load();
+    if (e == 0.f) return p;
+    // turned about the head, so it faces you at any height: moved straight up / down it was farther away and seen at a slant
+    const float D = config::Get().vrUiDistance, c = std::cos(e), sn = std::sin(e), hs = std::sin(e / 2.f), hc = std::cos(e / 2.f);
+    const XrQuaternionf q = p.orientation;
+    const XrVector3f f{-(2.f * (q.x * q.z + q.w * q.y)), -(2.f * (q.y * q.z - q.w * q.x)), -(1.f - 2.f * (q.x * q.x + q.y * q.y))};  // forward (-Z)
+    p.position = {p.position.x + f.x * D * (c - 1.f), p.position.y + D * sn, p.position.z + f.z * D * (c - 1.f)};
+    p.orientation = {q.w * hs + q.x * hc, q.y * hc + q.z * hs, q.z * hc - q.y * hs, q.w * hc - q.x * hs};  // q * (rotation about X)
     return p;
 }
 void SetUiImageRT(ID3D11Texture2D* tex, uint64_t frameId) { g_uiTex = tex, g_uiFrame = frameId; }
@@ -1334,7 +1341,7 @@ void PerfGame(double frameMs, double tickMs, double eye0Ms, double eye1Ms) {
     g_perf.maxFrame = std::fmax(g_perf.maxFrame, frameMs);
 }
 void SetImmersiveScene(bool on) { g_immersiveScene = on; }
-void SetUiPanelDrop(float metres) { g_uiPanelDrop = metres; }
+void SetUiPanelElevation(float degrees) { g_uiPanelElev = degrees * 3.14159265f / 180.f; }
 void SetFreezeReporter(void (*fn)(const char*)) { g_freezeReporter = fn; }
 
 uint32_t g_lastBbW = 0, g_lastBbH = 0;

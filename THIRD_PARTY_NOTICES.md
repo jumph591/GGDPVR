@@ -13,4 +13,5 @@ The released binaries also link the Microsoft C/C++ runtime statically (Visual S
 under the Visual Studio license terms.
 
 GGDPVR contains no files from Gal\*Gun: Double Peace. "Gal\*Gun" and "Gal\*Gun: Double Peace" are trademarks of their
-respective owners; the GGDPVR logo is fan art based on the game's logo.
+respective owners; the GGDPVR logo is fan art based on the game's logo. The setup program's settings screen shows a picture of
+the character Tsubomi Haruno, whose rights also belong to their owners.

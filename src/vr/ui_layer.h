@@ -20,7 +20,10 @@ bool Enabled();
 bool FantasizeActive();  // the Fantasize (wild fancy) screen is up
 // The 16:9 HUD band (the UI's "show all" area) inside a w x h view; the UI layer image is this band.
 void UpdatePanelFollow(float headPitchDeg);  // game thread, per frame (minigames: the panel follows the gaze)
-float PanelYOffset();        // the panel centre's height in the recentered frame (metres; minigames: lowered)
+// Minigames: the panel is turned about the recentered head by its elevation. A point / direction's (y, z) between the
+// recentered frame and the panel's own, where the panel is the plane z = -distance as if unturned.
+void PanelFromRel(float& y, float& z);
+void PanelToRel(float& y, float& z);
 float PanelWidth();          // the panel's width now (metres): ui_width, x minigame_panel_scale in minigames
 void SetTallPanel(bool on);  // minigames: the panel also shows the canvas above / below the HUD band
 void SetHudToggleContext(bool gameplay);  // stages / boss battles in play (not paused, no prompt): the HUD toggle works

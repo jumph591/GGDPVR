@@ -21,6 +21,8 @@
 #include "../vr/ui_layer.h"
 #include "../vr/vpad.h"
 #include "../vr/controllers.h"
+#include "../vr/comfort_turn.h"
+#include "../vr/indicators.h"
 #include "../vr/gfx_vars.h"
 #include "../vr/menu_pointer.h"
 #include "../vr/headset_audio.h"
@@ -290,10 +292,32 @@ void Enqueue(const std::string& cmd) {
             char name[96]{};
             int v = 0;
             if (sscanf_s(cmd.c_str() + 7, "%95s %d", name, unsigned(sizeof name), &v) == 2) vr::DevSetPcProperty(name, v);
+        } else if (cmd.rfind("!callfn ", 0) == 0) {  // dev: !callfn <class> <function> [numbers] - a script function of the first live object
+            std::lock_guard l(g_mu);
+            g_stateReq.push_back("__callfn " + cmd.substr(8));
+        } else if (cmd.rfind("!objset ", 0) == 0) {  // dev: !objset <class> <property> <int> - the first live object's int/byte
+            char cls[96]{}, name[96]{};
+            int v = 0;
+            if (sscanf_s(cmd.c_str() + 8, "%95s %95s %d", cls, unsigned(sizeof cls), name, unsigned(sizeof name), &v) == 3)
+                vr::DevSetObjProperty(cls, name, v);
         } else if (cmd.rfind("!fakegrip", 0) == 0) {  // dev: !fakegrip <ms> - the dominant grip (minigame touch)
             unsigned ms = 150;
             sscanf_s(cmd.c_str(), "!fakegrip %u", &ms);
             vr::ctrl::FakeGrip(ms);
+        } else if (cmd.rfind("!snapfade", 0) == 0) {  // dev: !snapfade <ms> - comfort turning's fade (-1 = the ini's)
+            float ms = -1;
+            sscanf_s(cmd.c_str(), "!snapfade %f", &ms);
+            vr::comfort::DevSetFadeMs(ms);
+        } else if (cmd.rfind("!bombgirls", 0) == 0) {  // dev: every live girl defeated (the Doki-Doki bomb): the rail moves on
+            std::lock_guard l(g_mu);
+            g_stateReq.push_back("__bomb " + (cmd.size() > 11 ? cmd.substr(11) : std::string("bomb")));
+        } else if (cmd == "!girls") {  // dev: every zako girl's state, place and flags (off-screen indicators)
+            vr::ind::DevDumpGirls();
+        } else if (cmd.rfind("!fakestick", 0) == 0) {  // dev: !fakestick <x> <y> <ms> - the off-hand stick (comfort turning)
+            float x = 0, y = 0;
+            unsigned ms = 300;
+            sscanf_s(cmd.c_str(), "!fakestick %f %f %u", &x, &y, &ms);
+            vr::ctrl::FakeStick(x, y, ms);
         } else if (cmd.rfind("!faketrigger", 0) == 0) {
             unsigned ms = 150;
             sscanf_s(cmd.c_str(), "!faketrigger %u", &ms);
@@ -578,6 +602,14 @@ void Pump() {
             states.swap(g_stateReq);
         }
         for (const auto& st : states) {
+            if (st.rfind("__callfn ", 0) == 0) {
+                vr::DevCallFunction(st.c_str() + 9);
+                continue;
+            }
+            if (st.rfind("__bomb ", 0) == 0) {  // (on the game thread: script calls)
+                vr::ind::DevDefeatLive(st.substr(7));
+                continue;
+            }
             if (st.rfind("__stencilscale ", 0) == 0) {  // dev: GG2HudShootingAggregate.SetStencilSightScale(x)
                 const float sc = float(atof(st.c_str() + 15));
                 static const uintptr_t fn = FindObject("GG2Game.GG2HudShootingAggregate.SetStencilSightScale", "Function");

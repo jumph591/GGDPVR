@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.1.0
+
+**Comfort**
+
+- **Snap turning, now the default**: in stages your view stays level and never turns smoothly on its own. Push your
+  off-hand stick left or right to turn with a quick blink, and pull it back to face where the game's camera is looking. A
+  blink turns you when a longer walk starts and you're facing well away from it. `turning=game` brings back the game's own
+  turning; updating keeps your own setting.
+- **Off-screen arrows**: small pink arrows point to girls out of view, and a faint blue ring points where the game is looking.
+- **Tunnel vision** while the camera moves you, one size for everything (`vignette`).
+- **Jumps**: big drops go dark from take-off to landing, small hops go in a straight line.
+- **Boss battles**: moves and turns are blinks, placed as a move starts. The Angel / Demon battles keep the game's camera
+  with tunnel vision. Holds and the heroines' special attacks show the game's own view, and their rocket explosions no
+  longer shake the screen. The victory scene is at standing height, the tentacle scenes no longer show the sky, and the
+  park battles' magazine attack waits until you've looked at it.
+- **Minigames**: the camera is kept straight (you never have to look more than 25 degrees up or down), the icon panel
+  faces you as it follows your gaze, and violent camera moves fade out and back in, each with its own option.
+
+**Setup program**
+
+- **Settings screen**: every option with a small animated demonstration, saved straight to your settings file.
+- **Button mapping**, and a **full controls guide** for each part of the game that always shows your own buttons.
+- Image sharpness shows the resolution the game renders at (after you've played once in VR).
+
+**Fixes and smaller changes**
+
+- Shoe prints are a sensible size; kiss and shoe print sizes are separate options.
+- Doki-Doki Mode: the target markers and hand are no longer cut off at the panel, and the stats window after it is visible.
+- Name tags no longer get cut off at the edge of the panel.
+- The right stick keeps scrolling menus when the game changes its mouse device.
+
 ## 1.0.1
 
 - **Stages staying flat after a loading screen on some VR runtimes** (seen with WiVRn on Linux): the head pose was

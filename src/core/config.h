@@ -80,7 +80,32 @@ struct Values {
     int vrReticleStyle = 1;            // 0.9.86: 0 = the mod's ring reticle, 1 = the game's own sight (aura) at the reticle
     int vrEffectRestDepth = 1;         // 0.9.84: with no weak-spot pop-up / boss mark up, the effect layer (kiss marks) at the HUD's depth
     int vrRemoveHitShake = 1;          // 0.9.83: the game's camera shake when you're hit taken out of the view
+    int vrJumpBlink = 1;               // the rail's big drops (jump_blink_height+) happen behind a blink
+    float vrJumpBlinkHeight = 1.5f;    // ...metres of height change
+    int vrFlattenJumps = 1;            // smaller jumps: the view goes straight from take-off to landing (view only)
     int vrRemoveWalkBob = 1;           // 0.9.83: the game's walking bob (move shake) taken out of the view
+    int vrTurning = 1;                 // stages - 0 = the game turns the view (turning=game), 1 = snap-follow (turning=snap)
+    float vrSnapThreshold = 45.f;      // ...route turns smaller than this (degrees) are ignored
+    float vrSnapAngle = 90.f;          // ...one stick snap (degrees)
+    float vrSnapFadeMs = 90.f;         // ...the black fade out, and back in (ms each; 0 = turn at once)
+    float vrSnapGlance = 1.f;          // ...a turn that rests shorter than this (s) and then turns back gets no snap
+    float vrRecenterGain = 0.2f;       // ...small offsets close while the head turns, by up to this share of its turn
+    int vrAutoSnap = 1;                // ...automatic snaps: 2 = route (look-ahead), 1 = travel (walks only), 0 = off
+    int vrGrabSnap = 1;                // ...a hold (grab / shove) turns you by blinks (else the game's own turn)
+    float vrTravelThreshold = 60.f;
+    float vrTravelDistance = 2.5f;     // ...auto_snap=travel: a walk this long (m; and >= 0.4 s per m) can turn you
+    float vrVignette = 0.6f;           // the motion vignette's strength (0 = off): stages, boss battles, minigames (one size)
+    float vrBossSnapThreshold = 30.f;  // turning=snap in boss battles: the game camera this far off, settled -> a snap
+    int vrMagazineLook = 1;            // the park battles' magazine: a marker, and the attack waits for your look
+    float vrStompMarkSize = 0.33f;     // the stomp (shoe print) marks' size, x the game's
+    float vrKissMarkSize = 1.f;        // the kiss marks' size, x the game's
+    float vrMinigameLookLimit = 25.f;  // minigames: how far up / down (degrees) levelling may leave the scene from eye level
+    int vrMinigameFade = 1;            // minigames: violent camera moves between scenes fade out and in (own option)
+    int vrMinigameLevel = 1;           // minigames: the camera's roll levelled, its whips between scenes blinked
+    int vrIndicators = 1;              // ...a chevron for each live girl out of view (Gal*Gun 2 style)
+    int vrGameMarker = 1;              // ...a faint ring where the game camera looks, while that is out of view
+    float vrIndicatorRing = 26.f;      // ...their ring: degrees from the view's centre
+    float vrIndicatorSize = 2.6f;      // ...their size (degrees)    // ...auto_snap=travel: a walk turns you when you face this far (deg) off it
     int vrFollowSystemRecenter = 1;    // 0.9.79: the headset's own recenter (LOCAL space change) re-centres the game too
     int vrXrCleanExit = 1;             // 0.9.77: the OpenXR session / instance closed before the process exits (exit crash)
     int vrQuitWithRuntime = 1;         // 0.9.77: the runtime's "Quit app" (session EXITING) closes the game

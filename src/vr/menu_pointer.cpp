@@ -2,6 +2,7 @@
 #include "head_tracking.h"
 
 #include <atomic>
+#include <unordered_map>
 #include <cmath>
 #include <cstring>
 #include <deque>
@@ -76,17 +77,44 @@ void RightButton(bool down) {
         PostMessageW(h, down ? WM_RBUTTONDOWN : WM_RBUTTONUP, down ? MK_RBUTTON : 0, at);
     }
 }
+std::atomic<int> g_wheelSent{0}, g_wheelRead{0}, g_wheelDropped{0};  // stick-scroll diagnostics
+std::atomic<int> g_diPolls{0}, g_diMice{0};  // ...the game's mouse reads since the last summary, mouse devices seen
+// A mouse-type DirectInput device (DIDEVCAPS.dwDevType low byte 0x12, through GetCapabilities - vtable slot 3). after
+// Mr. Demon Veggie -> title -> Score Attack the game stopped taking the records (queue 9 -> 24 waiting); delivery
+// only went to the device in the client global, so it now goes to any mouse device the game reads.
+bool IsMouseDevice(void* dev, uintptr_t globalMouse) {
+    if (reinterpret_cast<uintptr_t>(dev) == globalMouse) return true;
+    static std::mutex s_mu;
+    static std::unordered_map<void*, bool> s_known;
+    std::lock_guard l(s_mu);
+    auto it = s_known.find(dev);
+    if (it != s_known.end()) return it->second;
+    struct DevCaps { DWORD size, flags, devType, axes, buttons, povs, ffPeriod, ffRes, ffMin, fwRev, hwRev, drvVer; } caps{sizeof(DevCaps)};
+    using GetCapsFn = HRESULT(WINAPI*)(void*, DevCaps*);
+    uintptr_t vt = 0;
+    GetCapsFn fn = nullptr;
+    const bool ok = game::Read(reinterpret_cast<uintptr_t>(dev), vt) && vt && game::Read(vt + 3 * 8, fn) && fn && SUCCEEDED(fn(dev, &caps));
+    const bool mouse = ok && (caps.devType & 0xFF) == 0x12;
+    s_known[dev] = mouse;
+    if (mouse) ++g_diMice, LOG("[ptr] DI mouse: another mouse device %p in use (the client's is %p)", dev, (void*)globalMouse);
+    return mouse;
+}
 void Queue(DWORD ofs, DWORD data) {
     std::lock_guard l(g_qMu);
     if (g_queue.size() < 64) g_queue.emplace_back(ofs, data);
+    else if (ofs == 8) ++g_wheelDropped;
+}
+size_t QueueSize() {
+    std::lock_guard l(g_qMu);
+    return g_queue.size();
 }
 HRESULT WINAPI hk_GetDeviceData(void* dev, DWORD cb, DiObjData* rg, DWORD* inOut, DWORD flags) {
     uintptr_t mouse = 0;
     game::Read(game::Addr(kDiMouseGlobal), mouse);
     const DWORD cap = inOut ? *inOut : 0;  // records the caller has room for
     HRESULT hr = o_GetDeviceData(dev, cb, rg, inOut, flags);
-    if (reinterpret_cast<uintptr_t>(dev) != mouse || !rg || !inOut || cb != sizeof(DiObjData) || (flags & 1 /*PEEK*/))
-        return hr;
+    if (!rg || !inOut || cb != sizeof(DiObjData) || (flags & 1 /*PEEK*/) || !IsMouseDevice(dev, mouse)) return hr;
+    ++g_diPolls;
     std::lock_guard l(g_qMu);
     if (g_queue.empty() || !g_deliverOk) return hr;
     // the device is not acquired while the window is unfocused: still deliver the controller's records
@@ -94,6 +122,7 @@ HRESULT WINAPI hk_GetDeviceData(void* dev, DWORD cb, DiObjData* rg, DWORD* inOut
     static int s_logs = 0;
     if (s_logs < 8) ++s_logs, LOG("[ptr] DI mouse: game read %lu record(s) (hr 0x%08lX), adding %zu", n, (unsigned long)hr, g_queue.size());
     if (n < cap) {
+        if (g_queue.front().first == 8) ++g_wheelRead;
         rg[n] = {g_queue.front().first, g_queue.front().second, GetTickCount(), 0, 0};
         g_queue.pop_front();
         ++n;
@@ -142,14 +171,16 @@ bool Hit(int& outX, int& outY, bool clampOff = false) {
     if (!h || !ctrl::GetAim(aim) || !GetClientRect(h, &rc) || rc.right <= 0 || rc.bottom <= 0) return false;
     const auto& q = aim.rel.orientation;
     // forward (-Z) rotated by the aim orientation
-    const float dx = -(2.f * (q.x * q.z + q.w * q.y)), dy = -(2.f * (q.y * q.z - q.w * q.x)),
-                dz = -(1.f - 2.f * (q.x * q.x + q.y * q.y));
+    const float dx = -(2.f * (q.x * q.z + q.w * q.y));
+    float dy = -(2.f * (q.y * q.z - q.w * q.x)), dz = -(1.f - 2.f * (q.x * q.x + q.y * q.y));
+    float oy = aim.rel.position.y, oz = aim.rel.position.z;
+    const bool panel = g_onPanel.load();
+    if (panel) ui::PanelFromRel(oy, oz), ui::PanelFromRel(dy, dz);
     if (dz > -0.05f) return false;
     const auto& cfg = config::Get();
-    const bool panel = g_onPanel.load();
     const float dist = panel ? cfg.vrUiDistance : cfg.vrScreenDistance;
-    const float t = (-dist - aim.rel.position.z) / dz;
-    const float x = aim.rel.position.x + dx * t, y = aim.rel.position.y + dy * t - (panel ? ui::PanelYOffset() : 0.f);
+    const float t = (-dist - oz) / dz;
+    const float x = aim.rel.position.x + dx * t, y = oy + dy * t;
     const uint32_t cw = uint32_t(rc.right), ch = uint32_t(rc.bottom);
     uint32_t bx = 0, by = 0, bw = cw, bh = ch;
     if (panel) ui::BandOf(cw, ch, bx, by, bw, bh);  // the panel shows the HUD band of the UI image
@@ -305,12 +336,23 @@ void Scroll(float sy, bool dpadMode) {
         const bool first = dir != s_dir;
         s_dir = dir;
         Wheel(dir);
+        ++g_wheelSent;
         // first notch at once, then after 400 ms; repeats every 350 ms (light tilt) .. 130 ms (full tilt) - a notch
         // moves a Score Attack list ~3 rows
         const float t = std::fmin(1.f, (a - 0.35f) / 0.55f);
         s_next = now + (first ? 400 : ULONGLONG(350.f - 220.f * t));
         static int s_logs = 0;
         if (s_logs++ < 6) LOG("[ptr] stick scroll %+d at (%d,%d)", dir, g_x.load(), g_y.load());
+    }
+    // a summary every 3 s while scrolling ("stopped scrolling again" - the capped lines above had run out)
+    static ULONGLONG s_sumT = 0;
+    static int s_sums = 0;
+    if (now >= s_sumT && s_sums < 300) {
+        s_sumT = now + 3000, ++s_sums;
+        LOG("[ptr] stick scroll: %d notch(es) sent, %d read by the game, %zu waiting, %d dropped; pointer (%d,%d) on menu %d; "
+            "the game read the mouse %d time(s) (%d extra mouse device(s))",
+            g_wheelSent.exchange(0), g_wheelRead.exchange(0), QueueSize(), g_wheelDropped.exchange(0), g_x.load(), g_y.load(),
+            g_valid.load() ? 1 : 0, g_diPolls.exchange(0), g_diMice.load());
     }
 }
 void SetTouchInEyeView(bool on) { g_touchEyeView = on; }

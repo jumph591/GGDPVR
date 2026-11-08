@@ -51,5 +51,5 @@ void SetUiPanelWidth(float metres);
 void PerfGame(double frameMs, double tickMs, double eye0Ms, double eye1Ms);
 void PerfUiMark(int eye, bool start);  // render thread: the mod UI pass of an eye begins / ends  // game thread, per stereo frame
 void SetImmersiveScene(bool on);    // game thread: a VR scene (its loading screens: a surround + the panel)
-void SetUiPanelDrop(float metres);  // the panel quad this far below its recentered place (minigames)  // the panel quad's width (minigames: larger)
+void SetUiPanelElevation(float degrees);  // the panel quad turned this far up about the recentered head, facing it (minigames)  // the panel quad's width (minigames: larger)
 }  // namespace ggdpvr::xr

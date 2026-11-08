@@ -173,6 +173,39 @@ void Load(const std::wstring& modDir) {
     v.vrTitleFacePlayer = float(_wtof(Str16(ini, Sec(L"title_face_player"), L"title_face_player", L"1.3").c_str()));
     v.vrSightCenterScale = float(_wtof(Str16(ini, Sec(L"sight_center_scale"), L"sight_center_scale", L"0.75").c_str()));
     v.vrRemoveWalkBob = GetPrivateProfileIntW(Sec(L"remove_walk_bob"), L"remove_walk_bob", 1, ini.c_str());
+    v.vrJumpBlink = GetPrivateProfileIntW(Sec(L"jump_blink"), L"jump_blink", 1, ini.c_str());
+    v.vrJumpBlinkHeight = float(_wtof(Str16(ini, kFixed, L"jump_blink_height", L"1.5").c_str()));
+    v.vrFlattenJumps = v.vrJumpBlink;  // one option
+    {
+        std::string t = Str(ini, Sec(L"turning"), L"turning", L"snap");
+        for (auto& c : t) c = char(tolower(static_cast<unsigned char>(c)));
+        v.vrTurning = t == "snap" ? 1 : 0;
+    }
+    v.vrSnapThreshold = float(_wtof(Str16(ini, kFixed, L"snap_threshold", L"45").c_str()));
+    v.vrSnapAngle = float(_wtof(Str16(ini, Sec(L"snap_angle"), L"snap_angle", L"90").c_str()));
+    v.vrSnapFadeMs = float(_wtof(Str16(ini, Sec(L"snap_fade_ms"), L"snap_fade_ms", L"90").c_str()));
+    v.vrSnapGlance = float(_wtof(Str16(ini, Sec(L"snap_glance"), L"snap_glance", L"1.0").c_str()));
+    v.vrRecenterGain = float(_wtof(Str16(ini, kFixed, L"recenter_gain", L"0.2").c_str()));
+    {
+        std::string t = Str(ini, Sec(L"auto_snap"), L"auto_snap", L"travel");
+        for (auto& c : t) c = char(tolower(static_cast<unsigned char>(c)));
+        v.vrAutoSnap = t == "off" ? 0 : t == "route" ? 2 : 1;
+    }
+    v.vrGrabSnap = GetPrivateProfileIntW(Sec(L"grab_snap"), L"grab_snap", 1, ini.c_str());
+    v.vrTravelDistance = float(_wtof(Str16(ini, kFixed, L"travel_distance", L"2.5").c_str()));
+    v.vrVignette = float(_wtof(Str16(ini, Sec(L"vignette"), L"vignette", L"0.6").c_str()));
+    v.vrMinigameLookLimit = float(_wtof(Str16(ini, kFixed, L"minigame_look_limit", L"25").c_str()));
+    v.vrBossSnapThreshold = float(_wtof(Str16(ini, kFixed, L"boss_snap_threshold", L"30").c_str()));
+    v.vrMagazineLook = GetPrivateProfileIntW(kFixed, L"magazine_look", 1, ini.c_str());
+    v.vrStompMarkSize = float(_wtof(Str16(ini, Sec(L"stomp_mark_size"), L"stomp_mark_size", L"0.33").c_str()));
+    v.vrKissMarkSize = float(_wtof(Str16(ini, Sec(L"kiss_mark_size"), L"kiss_mark_size", L"1").c_str()));
+    v.vrMinigameLevel = GetPrivateProfileIntW(Sec(L"minigame_level"), L"minigame_level", 1, ini.c_str());
+    v.vrMinigameFade = GetPrivateProfileIntW(Sec(L"minigame_fade"), L"minigame_fade", 1, ini.c_str());
+    v.vrIndicators = GetPrivateProfileIntW(Sec(L"indicators"), L"indicators", 1, ini.c_str());
+    v.vrGameMarker = v.vrIndicators;  // one option
+    v.vrIndicatorRing = float(_wtof(Str16(ini, Sec(L"indicator_ring"), L"indicator_ring", L"26").c_str()));
+    v.vrIndicatorSize = float(_wtof(Str16(ini, Sec(L"indicator_size"), L"indicator_size", L"2.6").c_str()));
+    v.vrTravelThreshold = float(_wtof(Str16(ini, kFixed, L"travel_threshold", L"60").c_str()));
     v.vrQuitWithRuntime = GetPrivateProfileIntW(kFixed, L"quit_with_runtime", 1, ini.c_str());
     v.vrWeakSpotFullSizeM = float(_wtof(Str16(ini, Sec(L"weak_spot_full_size_m"), L"weak_spot_full_size_m", L"1.5").c_str()));
     v.vrWeakSpotMinSize = float(_wtof(Str16(ini, Sec(L"weak_spot_min_size"), L"weak_spot_min_size", L"0.3").c_str()));

@@ -1,5 +1,7 @@
 #include "head_tracking.h"
 
+#include <fstream>
+#include <sstream>
 #include <windows.h>
 #include <intrin.h>
 #include <algorithm>
@@ -26,6 +28,8 @@
 #include "vpad.h"
 #include "controllers.h"
 #include "menu_pointer.h"
+#include "comfort_turn.h"
+#include "indicators.h"
 #include "vrmath.h"
 
 namespace ggdpvr::vr {
@@ -200,6 +204,13 @@ void UpdateVrRenderSize(const xr::HeadSample& hs) {
     const uint32_t w = (uint32_t(2.f * std::tan(h) * ppt * k) + 1) & ~1u;
     const uint32_t hh = (uint32_t(2.f * std::tan(v) * ppt * k) + 1) & ~1u;
     SetVrRenderSize(w, hh);
+    // this headset's render size at render_scale 1: the setup program's Image sharpness setting shows it
+    static int s_baseW = 0, s_baseH = 0;
+    const int bw = int(2.f * std::tan(h) * ppt), bh = int(2.f * std::tan(v) * ppt);
+    if (std::abs(bw - s_baseW) > 8 || std::abs(bh - s_baseH) > 8) {
+        s_baseW = bw, s_baseH = bh;
+        std::ofstream(log::Directory() + L"\\render_size.txt") << bw << ' ' << bh;
+    }
 }
 
 bool g_loggedEyes = false;
@@ -590,7 +601,9 @@ void AimRayRel(const ctrl::Aim& aim, V3& org, V3& dir) {
     const float len = std::sqrt(Dot(v, v));
     org = h, dir = len > 1e-4f ? v * (1.f / len) : f;
 }
-Rot g_aimGameRot{};   // game camera rotation before head composition
+Rot g_aimGameRot{};   // the frame the head pose is composed onto: the game camera's rotation, or with turning=snap the
+                      // comfort frame (comfort_turn) - aim, cursor and panel mapping all work in this frame
+Rot g_gameCamRot{};   // the game camera's own rotation (shake removed)
 V3 g_aimGameLoc{};    // game camera location before head composition
 uint32_t g_offHeadRet = 0;  // GG2Girl.GetHeadLocation return offset
 // Dev: aim the simulated controller at the nearest live girl (end-to-end hit test of the controller aim).
@@ -641,7 +654,9 @@ void UpdateFakeAimAtGirl() {
         }
         ctrl::FakeHand(fh);
         const float Wp = ui::PanelWidth(), Hp = Wp * 9.f / 16.f, D = config::Get().vrUiDistance;
-        const float dx = (sx / 1920.f - 0.5f) * Wp - fh[0], dy = (0.5f - sy / 1080.f) * Hp + ui::PanelYOffset() - fh[1], dz = -D - fh[2];
+        float py = (0.5f - sy / 1080.f) * Hp, pz = -D;
+        ui::PanelToRel(py, pz);
+        const float dx = (sx / 1920.f - 0.5f) * Wp - fh[0], dy = py - fh[1], dz = pz - fh[2];
         ctrl::SetFakeQuiet(std::atan2(-dx, -dz) * 180.f / kPi, std::atan2(dy, std::sqrt(dx * dx + dz * dz)) * 180.f / kPi);
         return;
     }
@@ -938,14 +953,16 @@ void UpdateControllerCursor() {
     // The panel crossing only exists while the ray points toward the panel plane (within ~87 deg of the game camera's
     // forward). The eye-view cursor doesn't need it: aiming at girls beside / behind the game camera with the head
     // turned, the cursor used to freeze there - no weak-spot hits, no weak-spot pop-ups on them (0.9.111, 2F Stairway).
-    const bool crossesPanel = d.z <= -0.05f;
+    float py0 = hp.y, pz0 = hp.z, pdy = d.y, pdz = d.z;  // (the ray in the panel's own frame)
+    ui::PanelFromRel(py0, pz0), ui::PanelFromRel(pdy, pdz);
+    const bool crossesPanel = pdz <= -0.05f;
     const bool eyeCursor = g_cursorSpace == 1 && g_lastViewW > 0 && g_cur.halfH > 0;
     if (!crossesPanel && !eyeCursor) return;  // panel cursor space: pointing away from the panel plane
     float px = 0, py = 0;
     const float z = g_zoom.load();
     if (crossesPanel) {
-        const float t = (-D - hp.z) / d.z;
-        const float x = hp.x + d.x * t, y = hp.y + d.y * t - ui::PanelYOffset();
+        const float t = (-D - pz0) / pdz;
+        const float x = hp.x + d.x * t, y = py0 + pdy * t;
         px = (x * z / W + 0.5f) * float(g_lastBandW), py = (0.5f - y * z / H) * float(g_lastBandH);
         // where the aim ray crosses the HUD panel, in its stage units (route choice arrows - ui_layer)
         g_aimPanelX = px * 1920.f / float(g_lastBandW), g_aimPanelY = py * 1080.f / float(g_lastBandH), g_aimPanelT = GetTickCount64();
@@ -1059,7 +1076,7 @@ double PerfNowMs() {
 }
 // Performance (0.9.53): the eyes see more downward than upward (e.g. U44 / D55 deg). The symmetric render frustum
 // had to cover the larger half both ways; both eye renders are now tilted down by the midpoint (about 5.5 deg) and
-// their vertical half-angle shrinks to match - ~24% fewer pixels for the same view and sharpness (the user's stages ran
+// their vertical half-angle shrinks to match - ~24% fewer pixels for the same view and sharpness (stages ran
 // at half rate: GPU ~15.5 ms against the 13.9 ms of 72 Hz). The eye poses and FOVs are adjusted once, right after
 // sampling; everything downstream (frustum, render size, the submitted views, UI projections) follows from them.
 Q4 g_cantQ{};  // the tilt applied to the eye renders (identity = none)
@@ -1306,6 +1323,22 @@ void __fastcall hk_VpDraw(void* viewport, uint32_t present) {
     g_aimValid = ok && mode == 2;
     if (ok && !g_fakeHead.load()) LogEyesOnce(hs);
     ++g_frameId;
+    // turning=snap: this frame's comfort yaw and blink (before the eye draws compose the view)
+    {
+        float headYaw = 0.f;
+        bool headOk = false;
+        if (ok) {  // the head's own yaw (tracking space): re-centring rides on its turns
+            const auto& o = hs.rel.orientation;
+            const V3 f = Rotate(Q4{o.x, o.y, o.z, o.w}, {0, 0, -1});
+            headOk = f.x * f.x + f.z * f.z > 0.1f;  // (not looking straight up / down)
+            if (headOk) headYaw = std::atan2(f.x, -f.z) * 180.f / kPi;
+        }
+        comfort::Tick(g_frameId, g_lastPc, immersive && g_lastGameClass.find("GG2ShootingGame") != std::string::npos,
+                      immersive && g_lastGameClass.find("GG2Bs") != std::string::npos,
+                      immersive && g_lastGameClass.find("GG2ActionEvent") != std::string::npos, g_lastPaused, g_gameCamRot,
+                      g_aimGameLoc, headOk, headYaw);
+    }
+    ind::Tick(g_frameId, comfort::MarksActive(), hs, ok);  // the off-screen indicators' girls (placed at the view's composition)
     ui::UpdateMenuLayersGT(g_frameId, immersive && (g_lastGameClass.find("GG2TitleGame") != std::string::npos ||
                                                     g_lastGameClass.find("GG2BaseGame") != std::string::npos ||
                                                     g_lastGameClass.find("GG2ScoreAttackGameInfo") != std::string::npos));
@@ -1428,7 +1461,9 @@ bool PanelAim(float vw, float vh, const float* screen, float* dir) {
     const float u = screen[0] / float(bw), v = screen[1] / float(bh);
     const float z = g_zoom.load();  // the panel shows the view magnified z times about its centre
     const auto& hp = g_aimHead.position;
-    V3 d{(u - 0.5f) * W / z - hp.x, (0.5f - v) * H / z + ui::PanelYOffset() - hp.y, -D - hp.z};  // XR axes, rel frame
+    float py = (0.5f - v) * H / z, pz = -D;
+    ui::PanelToRel(py, pz);
+    V3 d{(u - 0.5f) * W / z - hp.x, py - hp.y, pz - hp.z};  // XR axes, rel frame
     const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     if (len < 1e-4f) return false;
     d = d * (1.f / len);
@@ -2067,6 +2102,10 @@ bool PointerTouchActive() {
 // GetCurrentControlDeviceType (0 mouse, 1 controller): IsCurrentControlDeviceType_Mouse / _Controller go through it
 uint32_t __fastcall hk_DevType(uintptr_t pi) { return PointerTouchActive() ? 0 : o_DevType(pi); }
 const uint8_t kTouchBeganBytes[] = {0x33, 0xC0, 0x4C, 0x63, 0xC2, 0x4D, 0x6B, 0xC0, 0x44, 0x41, 0x83, 0xBC};
+// The rail's jumps: NOT hooked. Their arc helper (rva 0x16C61E0) is a leaf the whole-program-optimised callers expect
+// to leave most registers alone; any C++ detour clobbers them and the pose update goes wrong - the pawn ended up outside
+// the world on the 1-1 bridge jump (it crashed). jump_blink / flatten_jumps work from the route data
+// instead (comfort_turn: each pose's sprmcsp, node height, timing).
 const uint8_t kTouchHeldBytes[] = {0x48, 0x63, 0xC2, 0x48, 0x6B, 0xC0, 0x44, 0x8B, 0x94, 0x08, 0x48, 0x09};
 const uint8_t kTouchLocBytes[] = {0x49, 0x63, 0xC0, 0x48, 0x6B, 0xC0, 0x44, 0x48, 0x8B, 0x84, 0x08, 0x60};
 const uint8_t kTouchOldLocBytes[] = {0x49, 0x63, 0xC0, 0x48, 0x6B, 0xC0, 0x44, 0x45, 0x85, 0xC9, 0x74, 0x0F};
@@ -2206,6 +2245,27 @@ bool TraceHit(uintptr_t actor, const V3& from, const V3& to, bool actors, V3& hi
     if (!who && t >= 1.f) return false;
     memcpy(&hitOut, hit + 0x10, sizeof hitOut);
     return true;
+}
+// Boss battle endings (the freed heroine's scene, the result): their camera sits low (reported: the head went through the
+// ground on ducking) - at a standing eye height from their first frame ("just be at the standing height"), 1.55 m
+// above the floor below it (one line check per place)
+void BossResultCamera(V3& loc) {
+    static float s_floor = 0.f;
+    static bool s_have = false;
+    static V3 s_at{};
+    if (g_lastGameClass.find("GG2Bs") == std::string::npos || !g_lastPc || !ue3::IsObject(g_lastPc) || !comfort::BossEnding(g_lastPc)) {
+        s_have = false;
+        return;
+    }
+    const V3 d = loc - s_at;
+    if (!s_have || d.x * d.x + d.y * d.y > 50.f * 50.f) {
+        V3 hit{};
+        s_have = true, s_at = loc;
+        s_floor = TraceHit(g_lastPc, loc + V3{0, 0, 20.f}, loc - V3{0, 0, 600.f}, false, hit, nullptr) ? hit.z : -1e9f;
+        LOG("[vr] boss victory: camera %.0f uu above the floor%s", s_floor > -1e8f ? loc.z - s_floor : -1.f,
+            s_floor > -1e8f && loc.z - s_floor < 132.f ? " - raised to 132 (1.55 m)" : "");
+    }
+    if (s_floor > -1e8f && loc.z < s_floor + 132.f) loc.z = s_floor + 132.f;
 }
 // Story game over (GG2GameOverGameInfo): the girl stands 150 uu in front of a camera only 100 uu above her feet
 // (framing her whole body: in VR the player felt very short - 0.9.9). The camera is raised to a stage's standing
@@ -2367,19 +2427,30 @@ void PostGetPlayerViewPoint(uintptr_t self, void* parms) {
         loc = loc - off;
         rot.yaw += yc, rot.pitch += pc;
     }
+    {  // flatten_jumps: a small jump step - the view's height takes the straight line (the game's arc is untouched)
+        float hz = 0.f;
+        if (comfort::HopViewZ(hz) && std::fabs(hz - loc.z) < 200.f) loc.z = hz;
+    }
     GameOverCamera(loc);
+    comfort::ViewLocation(loc);
+    BossResultCamera(loc);
     g_lastCamZ = loc.z;
     g_traceActor = self;
-    g_aimGameRot = rot;
+    g_gameCamRot = rot;
+    // turning=snap: the head pose goes onto the comfort frame instead of the rail camera's rotation (comfort_turn)
+    const Rot frame = comfort::ViewFrame(rot);
+    g_aimGameRot = frame;
     g_aimGameLoc = loc;
-    const Axes game = AxesOf(rot);
+    ind::SetFrame(g_frameId, loc, frame, rot);
+    const Axes game = AxesOf(frame);
     const auto& o = g_cur.rel.orientation;
     const Q4 q{o.x, o.y, o.z, o.w};
     const V3 fwd = ToWorld(game, XrToUe(Rotate(q, {0, 0, -1})));
     const V3 up = ToWorld(game, XrToUe(Rotate(q, {0, 1, 0})));
     const auto& pp = g_cur.rel.position;
     const V3 offLocal = XrToUe({pp.x, pp.y, pp.z}) * config::Get().vrWorldScale;
-    const V3 newLoc = loc + ToWorld(game, offLocal) + game.x * (FantasizeDolly(loc, rot) + DokiSpDolly(loc, rot));
+    // (the dollies move along the game camera's own forward: toward the girl it frames)
+    const V3 newLoc = loc + ToWorld(game, offLocal) + AxesOf(rot).x * (FantasizeDolly(loc, rot) + DokiSpDolly(loc, rot));
     const Rot newRot = RotFromAxes(fwd, up);
     memcpy(p + g_offVpLoc, &newLoc, sizeof newLoc);
     memcpy(p + g_offVpRot, &newRot, sizeof newRot);
@@ -2598,10 +2669,12 @@ bool PanelToHudProjection(float& sx, float& sy) {
     if (!bw || !bh) return false;
     const float k = float(bw) / 1920.f;
     const float D = config::Get().vrUiDistance, Wp = ui::PanelWidth(), Hp = Wp * float(bh) / float(bw);
-    const float x = (sx / 1920.f - 0.5f) * Wp, y = (0.5f - sy / 1080.f) * Hp + ui::PanelYOffset();
+    const float x = (sx / 1920.f - 0.5f) * Wp;
+    float y = (0.5f - sy / 1080.f) * Hp, pz = -D;
+    ui::PanelToRel(y, pz);
     const auto& ep = g_cur.rel.position;
     const auto& o = g_cur.rel.orientation;
-    const V3 d = Rotate(Q4{-o.x, -o.y, -o.z, o.w}, {x - ep.x, y - ep.y, -D - ep.z});
+    const V3 d = Rotate(Q4{-o.x, -o.y, -o.z, o.w}, {x - ep.x, y - ep.y, pz - ep.z});
     if (d.z > -1e-3f) return false;
     const float tx = d.x / -d.z, ty = d.y / -d.z;
     const float ex = (tx / std::tan(g_cur.halfH) + 1.f) * 0.5f * g_lastViewW, ey = (1.f - ty / std::tan(g_cur.halfV)) * 0.5f * g_lastViewH;
@@ -2625,10 +2698,12 @@ bool HudProjectionToPanel(float& sx, float& sy) {
     const float ty = (1.f - 2.f * ey / g_lastViewH) * std::tan(g_cur.halfV);
     const auto& o = g_cur.rel.orientation;
     const V3 d = Rotate(Q4{o.x, o.y, o.z, o.w}, {tx, ty, -1.f});
-    if (d.z > -1e-3f) return false;
     const auto& ep = g_cur.rel.position;
+    float py0 = ep.y, pz0 = ep.z, pdy = d.y, pdz = d.z;
+    ui::PanelFromRel(py0, pz0), ui::PanelFromRel(pdy, pdz);
+    if (pdz > -1e-3f) return false;
     const float D = config::Get().vrUiDistance, Wp = ui::PanelWidth(), Hp = Wp * float(bh) / float(bw);
-    const float t = (-D - ep.z) / d.z, x = ep.x + d.x * t, y = ep.y + d.y * t - ui::PanelYOffset();
+    const float t = (-D - pz0) / pdz, x = ep.x + d.x * t, y = py0 + pdy * t;
     sx = (x / Wp + 0.5f) * float(bw) / k, sy = (0.5f - y / Hp) * float(bh) / k;
     return true;
 }
@@ -2925,6 +3000,46 @@ void DevSetPcProperty(const char* name, int v) {
     else if (q.type.find("Int") != std::string::npos) *reinterpret_cast<int32_t*>(g_lastPc + q.offset) = v;
     else { LOG("[vr] dev: %s is %s (only Byte / Int)", name, q.type.c_str()); return; }
     LOG("[vr] dev: %s.%s = %d", ue3::ObjName(ue3::ClassOf(g_lastPc)).c_str(), name, v);
+}
+void DevSetObjProperty(const char* cls, const char* name, int v) {  // dev: the first live (level) object of a class
+    for (int32_t i = 0, n = ue3::NumObjects(); i < n; ++i) {
+        const uintptr_t o = ue3::ObjectAt(i);
+        if (!o || !ue3::IsA(o, cls) || ue3::PathName(o).find(".TheWorld.") == std::string::npos) continue;
+        ue3::PropInfo q;
+        if (!ue3::FindProperty(ue3::ClassOf(o), name, q)) { LOG("[vr] dev: %s not found on %s", name, ue3::ObjName(o).c_str()); return; }
+        if (q.type.find("Byte") != std::string::npos) *reinterpret_cast<uint8_t*>(o + q.offset) = uint8_t(v);
+        else if (q.type.find("Int") != std::string::npos) *reinterpret_cast<int32_t*>(o + q.offset) = v;
+        else { LOG("[vr] dev: %s is %s (only Byte / Int)", name, q.type.c_str()); return; }
+        LOG("[vr] dev: %s.%s = %d", ue3::ObjName(o).c_str(), name, v);
+        return;
+    }
+    LOG("[vr] dev: no live %s", cls);
+}
+void DevCallFunction(const char* spec) {  // dev: <class> <function> [numbers] - on the first live object of the class
+    std::istringstream is{std::string(spec)};
+    std::string cls, name;
+    is >> cls >> name;
+    const uintptr_t fn = ue3::FindObject(("GG2Game." + cls + "." + name).c_str(), "Function");
+    if (!fn) { LOG("[vr] dev: no function %s.%s", cls.c_str(), name.c_str()); return; }
+    for (int32_t i = 0, n = ue3::NumObjects(); i < n; ++i) {
+        const uintptr_t o = ue3::ObjectAt(i);
+        if (!o || !ue3::IsA(o, cls.c_str()) || ue3::PathName(o).find("Default__") != std::string::npos) continue;
+        uint8_t parms[0x200]{};
+        std::string shown;
+        double v = 0.0;
+        for (const auto& p : ue3::Properties(fn)) {
+            if (p.offset + 4 > sizeof parms || !(is >> v)) break;
+            if (p.type.find("Float") != std::string::npos) *reinterpret_cast<float*>(parms + p.offset) = float(v);
+            else *reinterpret_cast<int32_t*>(parms + p.offset) = int32_t(v);
+            shown += " " + p.name + "=" + std::to_string(v);
+        }
+        uintptr_t vt = 0, pe = 0;
+        Read(o, vt), Read(vt + game::rva::ProcessEvent_VSlot, pe);
+        reinterpret_cast<void(__fastcall*)(uintptr_t, uintptr_t, void*, void*)>(pe)(o, fn, parms, nullptr);
+        LOG("[vr] dev: %s.%s(%s) on %s", cls.c_str(), name.c_str(), shown.c_str(), ue3::ObjName(o).c_str());
+        return;
+    }
+    LOG("[vr] dev: no live %s", cls.c_str());
 }
 void SetAePin(int mode, float amp, float hz) {
     g_aePinMode = mode, g_aePinAmp = amp, g_aePinHz = hz, g_aePinT0 = GetTickCount64();

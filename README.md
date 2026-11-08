@@ -27,7 +27,11 @@ More mods, including a VR texture fix for DarkhawkZer02's Winter Passion mod pac
 - **The game's HUD on a floating panel**, with weak-spot pop-ups, name tags and boss markers placed in 3D at the girls -
   also on girls you turn your head to look at, outside the panel.
 - **Minigames adapted for VR**: touch and rub with the grip, motion gestures with your hands or the thumbsticks.
-- **Comfort options**: the game's hit shake and walking bob removed (on by default), recenter on a button.
+- **Comfort built in**: your view stays level and turns only with quick blinks (*Snap turning*, on by default), tunnel
+  vision while the camera moves you, big jumps faded out, boss moves as blinks, minigames kept upright with their violent
+  camera moves faded. The game's hit shake and walking bob are removed, and off-screen arrows point to girls out of view.
+- **A settings screen** in the setup program: every option with a small animated demonstration, button mapping, and the
+  full list of controls for each part of the game.
 - **Game sound in the headset**, kept playing when another window has the focus.
 - **A small setup program** to install, repair, switch off and uninstall - it never touches the game's own files or
   your save data.
@@ -52,8 +56,8 @@ More mods, including a VR texture fix for DarkhawkZer02's Winter Passion mod pac
 3. Click **Install**.
 4. Start your VR software, then start the game (from Steam, or the setup's *Start game* button).
 
-`GGDPVR-Setup.exe` is also how you repair, switch the mod off and on, open your settings and logs, turn logging off
-and on, and uninstall. It always keeps your settings.
+`GGDPVR-Setup.exe` is also how you repair, switch the mod off and on, change your settings, open your logs, turn logging
+off and on, and uninstall. It always keeps your settings.
 
 ### Updating
 
@@ -77,7 +81,8 @@ No game file is replaced. When updating by hand, keep your own `ggdpvr.ini`.
 
 What each button does in each part of the game. These are the defaults for a right-handed player on **Meta Quest
 controllers**. Left-handed (`dominant_hand=left`): the triggers, grips and thumbsticks swap hands; A, B, X and Y stay
-where they are. Every button can be changed in the `[controls]` section of the settings file.
+where they are. Every button can be changed under *Button mapping* in the setup's *Settings*, which also has this whole
+list, showing your own buttons.
 
 ### Everywhere
 
@@ -85,6 +90,8 @@ where they are. Every button can be changed in the `[controls]` section of the s
 |---|---|
 | Pause | left menu button (☰) |
 | Re-center the view (your headset's own re-center works too) | press the left thumbstick down |
+| Turn yourself (Snap turning, in stages) | left thumbstick left / right |
+| Face where the game's camera is looking (Snap turning, in stages) | pull the left thumbstick back |
 
 ### Stages and boss battles
 
@@ -174,8 +181,11 @@ set `controllers=0`.
 
 ## Settings
 
-Everything is in one file, `Binaries\Win64\GGDPVR\ggdpvr.ini` in the game folder. Every option is explained there and
-shows its default; changes apply the next time you start the game. The everyday options come first (HUD panel size
+Click *Settings* in `GGDPVR-Setup.exe`: pages of options, each with a small animated demonstration of what it does, plus
+button mapping and the full list of controls.
+
+Everything is saved in one file, `Binaries\Win64\GGDPVR\ggdpvr.ini` in the game folder, which you can also edit by hand.
+Every option is explained there and shows its default; changes apply the next time you start the game. The everyday options come first (HUD panel size
 and distance, weak-spot pop-up size, comfort, audio), then the controller buttons in `[controls]`, then `[advanced]`.
 
 To go back to the defaults, delete `ggdpvr.ini` and click *Repair* in the setup.
@@ -260,5 +270,5 @@ GGDPVR is released under the [MIT License](LICENSE). Third-party components keep
 ## Disclaimer
 
 GGDPVR is an unofficial fan project, not affiliated with or endorsed by INTI CREATES, PQube or any other rights holder.
-Gal\*Gun: Double Peace and its logo are trademarks of their respective owners; the GGDPVR logo is fan art based on the
-game's logo. The mod contains no game files - you need your own copy of the game.
+Gal\*Gun: Double Peace, its logo and its characters are trademarks and copyrights of their respective owners; the GGDPVR logo
+is fan art based on the game's logo, and the setup program's settings screen shows a picture of the character Tsubomi Haruno. The mod contains no game files - you need your own copy of the game.

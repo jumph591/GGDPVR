@@ -10,6 +10,7 @@
 //   other trigger    -> RT (touch)         A / B -> A / B        Y -> Y (Doki-Doki)    X -> Back (panic)
 //   left menu        -> Start (pause)      other stick -> left stick + D-pad (route choice, menus)
 //   dominant stick   -> right stick, click -> R3 (glasses)        other stick click -> recenter view
+//   (turning=snap: in stages the dominant stick turns the view instead - comfort_turn)
 namespace ggdpvr::vr::ctrl {
 struct Aim {
     XrPosef raw{};  // LOCAL space
@@ -25,6 +26,7 @@ float HitDistance();                 // for the reticle
 bool TriggerHeld();
 bool GripHeld();
 void Sticks(float dom[2], float off[2]);  // thumbstick deflections (x right, y up), dominant / other hand
+void FakeStick(float x, float y, unsigned ms);  // dev: !fakestick - a simulated off-hand stick (what Sticks reports)
 bool OffTriggerHeld();                     // dominant grip (latched): the minigames' touch
 void FakeGrip(unsigned ms);          // dev: a simulated grip squeeze
 void HitPulse();                     // a shot hit something (stronger vibration on the aiming hand)                  // dominant trigger (latched), for the menu pointer

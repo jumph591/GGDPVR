@@ -24,4 +24,5 @@ This license covers GGDPVR's own source code. The third-party components in
 third_party/ keep their own licenses (see THIRD_PARTY_NOTICES.md). The logo
 artwork in docs/images and package/setup_app/res is fan art based on the
 Gal*Gun: Double Peace logo, whose rights belong to their owners; it is not
-covered by this license.
+covered by this license. Nor is the picture of the character Tsubomi Haruno
+in package/setup_app/res/girl.png, whose rights belong to their owners.

@@ -20,6 +20,8 @@
 #include "../xr/xr_shared.h"
 #include "head_tracking.h"
 #include "controllers.h"
+#include "comfort_turn.h"
+#include "indicators.h"
 #include "menu_pointer.h"
 #include "../xr/xr_input.h"
 #include "menu_pointer.h"
@@ -64,6 +66,8 @@ struct Target {  // RGBA8 texture usable as render target and shader input
     void Release() { SafeRelease(srv), SafeRelease(rtv), SafeRelease(tex); }
 };
 Target g_save, g_black, g_white;  // backbuffer-sized: saved eye image, UI over black, UI over white
+Target g_black2, g_white2;         // ...the panel movies above the game's screen fade (g_panelSplit; created on first use)
+int g_panelSplit = -1;             // render thread: the screen fade's index when a panel movie is drawn above it, else -1
 Target g_ui;                      // panel image: unpremultiplied RGBA, the 16:9 HUD band (+ rows above / below: tall)
 std::atomic<bool> g_tallPanel{false};   // minigames: the panel shows the whole canvas height
 std::atomic<bool> g_hudHidden{false};   // the player hid the gameplay HUD (hud_toggle_button)
@@ -189,7 +193,7 @@ float4 VS(uint id : SV_VertexID) : SV_Position {
 cbuffer C : register(b0) {
     int2 off; int tintOn; float feather; float2 band; float2 pad;  // pad.x: apply the full-screen overlays (FS);
                                                                    // pad.y: rows of canvas above the band (tall panel)
-    float4 zoom;   // x = factor, y = on
+    float4 zoom;   // x = factor, y = on, z = B2 / W2 hold the panel movies above the screen fade (drawn over the rest)
     float4 zp0;    // panel centre (eye space), half-width and half-height vectors, eye projection
     float4 zpu;
     float4 zpv;
@@ -202,6 +206,8 @@ Texture2D<float4> B : register(t0);
 Texture2D<float4> W : register(t1);
 Texture2D<float4> CTB : register(t2);
 Texture2D<float4> CTW : register(t3);
+Texture2D<float4> B2 : register(t6);
+Texture2D<float4> W2 : register(t7);
 float EdgeWeight(float2 uv, float f) {  // uv in [-1,1]: 1 inside, falling to 0 at the outline over width f
     float e = min(1 - abs(uv.x), 1 - abs(uv.y));
     return saturate(e / f);
@@ -231,6 +237,14 @@ float4 Combine(float4 pos : SV_Position) : SV_Target {
                        // the world behind already has them)
         float4 f = CFS.Load(int3(int2(bp), 0));
         c = lerp(c, f.rgb, f.a);
+    }
+    if (zoom.z != 0) {  // a window the game draws above its screen fade: over the faded rest
+        float3 b2 = B2.Load(p).rgb, w2 = W2.Load(p).rgb;
+        float a2 = saturate(1.0 - dot(w2 - b2, float3(1, 1, 1) / 3.0));
+        float3 c2 = a2 > 0.004 ? saturate(b2 / a2) : float3(0, 0, 0);
+        float ao = a2 + a * (1 - a2);
+        c = ao > 0.004 ? (c2 * a2 + c * a * (1 - a2)) / ao : float3(0, 0, 0);
+        a = ao;
     }
     if (zoom.y != 0) {  // right-click zoom: the panel becomes a window onto the view magnified about its centre
         float2 uv = float2(bp.x / band.x * 2 - 1, 1 - bp.y / band.y * 2) / zoom.x;
@@ -282,6 +296,11 @@ cbuffer K : register(b0) {
     float4 sgt2;   // its centre squeeze (sight_center_scale): x = scale, y = R0, z = R1 (px)
     float4 tag;    // name_tags_3d: x = on, yz = her tag's anchor in this eye (px), w = eye px per tag texel
     float4 tag2;   // the anchor inside the tag image (px) xy, its size zw
+    float4 blink;  // turning=snap: x = how black the eye image is (the snap turn's fade)
+    float4 indp;   // off-screen indicators: x = how many, y = their size (px), z = the game-look marker is up
+    float4 ind[16];  // each: its centre (px), the unit direction it points (px space)
+    float4 mk;     // the game-look marker: centre, direction
+    float4 vig;    // motion vignette: x = strength (0..1), y = aperture (tan, from the eye's centre), z = feather (tan)
 };
 Texture2D<float4> FS : register(t0);
 Texture2D<float4> TB : register(t1);
@@ -312,6 +331,10 @@ float4 Cutout(Texture2D<float4> T, float4 c, float4 u, float4 v, float4 crop, fl
     return T.SampleLevel(S, tc, 0);
 }
 float Mirror(float u) { return 1 - abs(fmod(abs(u), 2.0) - 1); }
+float Seg(float2 p, float2 a, float2 b) {  // distance from p to the segment a-b
+    float2 pa = p - a, ba = b - a;
+    return length(pa - ba * saturate(dot(pa, ba) / dot(ba, ba)));
+}
 float3 ToLin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
 float3 ToSrgb(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
 float PanelWeight(float2 px) {  // the panel's edge weight at this eye pixel (0 outside the panel)
@@ -578,7 +601,7 @@ float4 Composite(float4 pos : SV_Position) : SV_Target {
     }
     // Nested branches: HLSL's && does not short-circuit, so testing the store and calling StoreWallDown in one condition ran the store's wall code (an
     // eye-image read at a computed spot) for every pixel of every scene - since 0.9.15 the NVIDIA driver logged GPU
-    // engine resets (event 153) at each of the user's 1-4 s freezes (stage, title, store, Dressing Room).
+    // engine resets (event 153) at each of the 1-4 s freezes (stage, title, store, Dressing Room).
     bool wallDone = false;
     [branch] if (vbd.w > 1.5 && lpan.w == 0 && eyeh.z > 0) {
         float3 wallDown;
@@ -742,6 +765,34 @@ float4 Composite(float4 pos : SV_Position) : SV_Target {
             col = lerp(col, o.rgb, o.a);
         }
     }
+    if (vig.x > 0) {  // motion vignette: the view's edges darken (under the indicators)
+        float2 t = float2((pos.x / proj.z * 2 - 1) * proj.x, (1 - pos.y / proj.w * 2) * proj.y);
+        col *= 1 - smoothstep(vig.y, vig.y + vig.z, length(t)) * 0.97 * saturate(vig.x * 1.5);
+    }
+    if (indp.x > 0 || indp.z != 0) {  // off-screen indicators: pink chevrons toward girls out of view; the game-look marker
+        float s = indp.y, px1 = 1.0 / max(s, 1.0);
+        for (int k = 0; k < 16; ++k) {
+            if (k >= int(indp.x)) break;
+            float2 d = pos.xy - ind[k].xy;
+            if (dot(d, d) > 4 * s * s) continue;
+            float2 u = ind[k].zw, v = float2(-u.y, u.x), q = float2(dot(d, u), dot(d, v)) / s;
+            float dd = min(Seg(q, float2(-0.28, 0.42), float2(0.32, 0)), Seg(q, float2(-0.28, -0.42), float2(0.32, 0)));
+            float fill = 1 - smoothstep(0.13 - px1, 0.13 + px1, dd), edge = 1 - smoothstep(0.22 - px1, 0.22 + px1, dd);
+            col = lerp(col, float3(0.06, 0.02, 0.08), edge * 0.5);
+            col = lerp(col, float3(1.0, 0.56, 0.8), fill * 0.92);
+        }
+        if (indp.z != 0) {  // a hollow ring with a small notch outward: another shape and tint, fainter
+            float2 d = pos.xy - mk.xy;
+            if (dot(d, d) < 4 * s * s) {
+                float2 u = mk.zw, v = float2(-u.y, u.x), q = float2(dot(d, u), dot(d, v)) / s;
+                float dd = min(abs(length(q) - 0.36), Seg(q, float2(0.4, 0.13), float2(0.62, 0)));
+                dd = min(dd, Seg(q, float2(0.4, -0.13), float2(0.62, 0)));
+                float fill = 1 - smoothstep(0.06 - px1, 0.06 + px1, dd), edge = 1 - smoothstep(0.13 - px1, 0.13 + px1, dd);
+                col = lerp(col, float3(0.02, 0.05, 0.08), edge * 0.35);
+                col = lerp(col, float3(0.62, 0.92, 1.0), fill * 0.6);
+            }
+        }
+    }
     if (flags.w != 0 && flags.z > 0) {  // the sight's reveal area (mini demons, Mr. Happiness): faint outer ring
         float r2 = length(pos.xy - misc.yz) / float(flags.z);
         float ring2 = smoothstep(0.955, 0.985, r2) * (1 - smoothstep(0.985, 1.015, r2));
@@ -754,7 +805,7 @@ float4 Composite(float4 pos : SV_Position) : SV_Target {
         col = lerp(col, float3(0.05, 0.02, 0.08), saturate(edge) * 0.6);
         col = lerp(col, float3(1, 0.85, 0.95), saturate(ring));
     }
-    return float4(col, 1);
+    return float4(col * (1 - saturate(blink.x)), 1);
 }
 
 // desktop_mirror=1: the HUD panel - an OpenXR layer the headset composites, never part of the game's image - drawn into
@@ -811,7 +862,7 @@ bool CreatePipeline(ID3D11Device* dev) {
     SafeRelease(vs), SafeRelease(psA), SafeRelease(psB), SafeRelease(psC);
     D3D11_BUFFER_DESC bd{112, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     hr[3] = dev->CreateBuffer(&bd, nullptr, &g_cbCombine);
-    bd.ByteWidth = 736;  // = the Composite cbuffer (46 float4s; grow with it - a short buffer leaves new fields zero)
+    bd.ByteWidth = 1056;  // = the Composite cbuffer (66 float4s; grow with it - a short buffer leaves new fields zero)
     hr[4] = dev->CreateBuffer(&bd, nullptr, &g_cbComposite);
     bd.ByteWidth = 64;  // the MirrorPanel cbuffer (4 float4s)
     hr[11] = dev->CreateBuffer(&bd, nullptr, &g_cbMirror);
@@ -890,7 +941,7 @@ bool Ensure(ID3D11Device* dev, ID3D11Texture2D* bb) {
         }
         // optional ones (eye overlay, zoom scope movie, menu layers: up to ~300 MB at 3640x3782) are created on first
         // use (LazyTarget) - video memory, 0.9.16 - and released here so they follow the new size
-        g_eo.Release(), g_sco.Release(), g_sgt.Release(), g_tag.Release(), g_tagZero.Release();
+        g_eo.Release(), g_sco.Release(), g_sgt.Release(), g_tag.Release(), g_tagZero.Release(), g_black2.Release(), g_white2.Release();
         for (auto& l : g_lay) l.Release();
         g_desc = d;
         g_fsValid = g_tintValid = g_eoValid = g_scoValid = g_sgtValid = g_tagValid = false;
@@ -938,7 +989,7 @@ struct ZoomGeo {
     float p0[4]{}, pu[4]{}, pv[4]{}, proj[4]{};
 };
 bool Combine(ID3D11Device* dev, ID3D11DeviceContext* ctx, Target& dst, bool tintHandover = false,
-             const ZoomGeo* zg = nullptr, bool wholeFrame = false, bool overlays = false, uint32_t ext = 0) {
+             const ZoomGeo* zg = nullptr, bool wholeFrame = false, bool overlays = false, uint32_t ext = 0, bool upper = false) {
     if (!CreatePipeline(dev)) return false;
     Pass p(ctx);
     if (!p.ctx1) return false;
@@ -955,21 +1006,26 @@ bool Combine(ID3D11Device* dev, ID3D11DeviceContext* ctx, Target& dst, bool tint
         float pad[2];
         float zoom[4], p0[4], pu[4], pv[4], proj[4];
     } cb{{int32_t(x0), int32_t(y0)}, tintHandover && g_tintValid ? 1 : 0, config::Get().vrUiTintFeather,
-         {float(bw), float(bh)}, {overlays && g_fsValid && g_backdrop == 0 && g_fsOverPanel ? 1.f : 0.f, float(ext)}, {zg ? zg->factor : 1.f, zg ? 1.f : 0.f, 0, 0},
+         {float(bw), float(bh)}, {overlays && g_fsValid && g_backdrop == 0 && g_fsOverPanel ? 1.f : 0.f, float(ext)}, {zg ? zg->factor : 1.f, zg ? 1.f : 0.f, upper ? 1.f : 0.f, 0},
          {}, {}, {}, {}};
     if (zg) {
         memcpy(cb.p0, zg->p0, 16), memcpy(cb.pu, zg->pu, 16), memcpy(cb.pv, zg->pv, 16), memcpy(cb.proj, zg->proj, 16);
     }
     p.ctx1->UpdateSubresource(g_cbCombine, 0, nullptr, &cb, 0, 0);
     p.ctx1->PSSetShader(g_psCombine, nullptr, 0);
-    ID3D11ShaderResourceView* srvs[6] = {g_black.srv, g_white.srv, g_tintB.srv, g_tintW.srv, g_save.srv, g_fs.srv};
-    p.ctx1->PSSetShaderResources(0, 6, srvs);
+    ID3D11ShaderResourceView* srvs[8] = {g_black.srv, g_white.srv, g_tintB.srv,  g_tintW.srv,
+                                         g_save.srv,  g_fs.srv,    upper ? g_black2.srv : nullptr, upper ? g_white2.srv : nullptr};
+    p.ctx1->PSSetShaderResources(0, 8, srvs);
     p.ctx1->PSSetConstantBuffers(0, 1, &g_cbCombine);
     p.ctx1->PSSetSamplers(0, 1, &g_linear);
     D3D11_VIEWPORT vp{0, 0, float(dst.w), float(dst.h), 0, 1};
     p.ctx1->RSSetViewports(1, &vp);
     p.ctx1->OMSetRenderTargets(1, &dst.rtv, nullptr);
     p.ctx1->Draw(3, 0);
+    if (upper) {
+        ID3D11ShaderResourceView* none[2] = {};
+        p.ctx1->PSSetShaderResources(6, 2, none);
+    }
     return true;
 }
 
@@ -1044,7 +1100,8 @@ void Composite(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     vr::DressingRoom room;
     const bool voidOn = vr::GetDressingRoom(room);
     const bool layers = g_layValid[0] || g_layValid[1] || g_layValid[2] || g_layValid[3];
-    if (!(g_fsValid || g_tintValid || g_eoValid || reticle || scopeOn || g_backdrop || voidOn || layers || g_coverWorld || g_tagValid) ||
+    if (!(g_fsValid || g_tintValid || g_eoValid || reticle || scopeOn || g_backdrop || voidOn || layers || g_coverWorld || g_tagValid ||
+          vr::comfort::BlinkRecent() || vr::ind::AnyRecent()) ||
         !CreatePipeline(dev))
         return;
     xr::FrameRecord rec;
@@ -1141,6 +1198,11 @@ void Composite(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
         float sgt2[4];  // its centre squeeze
         float tag[4];   // name_tags_3d
         float tag2[4];
+        float blink[4];  // turning=snap: the snap turn's fade
+        float indp[4];   // off-screen indicators: count, size (px), marker up
+        float ind[16][4];
+        float mk[4];
+        float vig[4];    // motion vignette
     } cb{{x0, y0, x1 - x0, y1 - y0},
          {c0.x, c0.y, c0.z, panelValid},
          {cu.x, cu.y, cu.z, 0},
@@ -1186,6 +1248,50 @@ void Composite(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
             cb.tag[0] = 1.f, cb.tag[1] = float(bx0) + g_tagEyeX[e].load() * s, cb.tag[2] = g_tagEyeY[e].load() * s,  // the game's tag y counts from the top of the eye image (not the band)
             cb.tag[3] = config::Get().vrUiWidth / config::Get().vrUiDistance / (2.f * tH);
             cb.tag2[0] = kTagBoxW / 2.f * s, cb.tag2[1] = kTagBoxUp * s, cb.tag2[2] = float(g_tag.w), cb.tag2[3] = float(g_tag.h);
+        }
+    }
+    cb.blink[0] = vr::comfort::BlinkForFrame(rec.frameId);  // the frame's own amount: the turn lands on a black frame
+    {  // motion vignette: the aperture closes from 60 to 30 deg (from the eye's centre) as it strengthens
+        const float v = vr::comfort::VignetteForFrame(rec.frameId);
+        if (v > 0.001f) {
+            const float ap = (60.f - 30.f * v) * 3.14159265f / 180.f;
+            cb.vig[0] = v, cb.vig[1] = std::tan(ap), cb.vig[2] = std::tan(ap + 12.f * 3.14159265f / 180.f) - std::tan(ap);
+        }
+    }
+    {  // off-screen indicators: the frame's marks (recentred tracking space) into this eye's pixels
+        vr::ind::Mark marks[vr::ind::kMaxMarks], marker{};
+        bool haveMarker = false;
+        const int n = vr::ind::MarksForFrame(rec.frameId, marks, vr::ind::kMaxMarks, haveMarker, marker);
+        auto toPx = [&](const float* p, float& x, float& y) {
+            const XrVector3f l = QRot(ref.orientation, {p[0], p[1], p[2]});
+            const XrVector3f e = QRotInv(eq, {l.x + ref.position.x - rec.pose.position.x, l.y + ref.position.y - rec.pose.position.y,
+                                              l.z + ref.position.z - rec.pose.position.z});
+            if (e.z >= -1e-4f) return false;
+            x = 0.5f * W * (1.f + e.x / -e.z / tH), y = 0.5f * H * (1.f - e.y / -e.z / tV);
+            return true;
+        };
+        auto put = [&](const vr::ind::Mark& m, float* out) {
+            float x, y, tx, ty;
+            if (!toPx(m.at, x, y) || !toPx(m.tip, tx, ty)) return false;
+            const float dx = tx - x, dy = ty - y, dl = std::sqrt(dx * dx + dy * dy);
+            if (dl < 1e-3f) return false;
+            out[0] = x, out[1] = y, out[2] = dx / dl, out[3] = dy / dl;
+            return true;
+        };
+        int k = 0;
+        for (int i = 0; i < n && k < 16; ++i)
+            if (put(marks[i], cb.ind[k])) ++k;
+        cb.indp[0] = float(k);
+        cb.indp[1] = std::tan(std::fmax(0.3f, config::Get().vrIndicatorSize) * 3.14159265f / 180.f) / tH * 0.5f * W;
+        cb.indp[2] = haveMarker && put(marker, cb.mk) ? 1.f : 0.f;
+        if (config::Get().developer) {  // dev: once a second
+            static ULONGLONG s_next = 0;
+            if (GetTickCount64() >= s_next && (n || haveMarker)) {
+                s_next = GetTickCount64() + 1000;
+                LOG("[ind] eye %d frame %llu: %d marks -> %d drawn, first at (%.0f,%.0f) dir (%.2f,%.2f), size %.0f px, marker %.0f at (%.0f,%.0f); "
+                    "image %.0fx%.0f, tan %.2f/%.2f", rec.eye, rec.frameId, n, k, cb.ind[0][0], cb.ind[0][1], cb.ind[0][2], cb.ind[0][3],
+                    cb.indp[1], cb.indp[2], cb.mk[0], cb.mk[1], W, H, tH, tV);
+            }
         }
     }
     cb.eyeh[0] = 1.6f;  // the title floor, metres below the recentered head
@@ -1313,6 +1419,18 @@ void Composite(ID3D11Device* dev, ID3D11DeviceContext* ctx) {
 bool ScopeMode();
 // The shooting effect movie (weak-spot pop-ups, boss "!" markers) is drawn per eye while the controllers aim
 bool EffectMovieInEye() { return config::Get().vrWeakSpotAtReticle && vr::ctrl::AimActive(); }
+// Doki Doki Mode's target select is up: a girl marker was placed (shown) in the last 0.5 s (game thread sets it)
+std::atomic<ULONGLONG> g_dkSelectT{0};
+bool DokiSelectInEye() {
+    return EffectMovieInEye() && config::Get().vrMode == 2 && GetTickCount64() - g_dkSelectT.load() < 500;
+}
+// ...the hand too, and also through Doki Doki Mode itself (it touched beyond the panel but wasn't drawn there)
+bool DokiHandInEye() {
+    return DokiSelectInEye() || (EffectMovieInEye() && config::Get().vrMode == 2 && vr::comfort::InStageDoki());
+}
+// the hand movie's _root scale while it is drawn per eye (FlatProportion: flat-screen size against the world; its
+// positions are divided by it). Game thread.
+float g_handScale = 1.f;
 // kEye: drawn 1:1 over each eye image. The shooting effect movie places its weak-spot pop-ups at the sight
 // cursor, which (with controller aim) is in eye-image pixels, so drawn this way they appear at the reticle.
 // kScope: the game's zoom scope (darkened view, tinted circle, centre mark), drawn per eye moved onto the reticle.
@@ -1391,6 +1509,9 @@ void Classify(void* cmd) {
         if (cat == kPanel && vr::InFinalDoki() && MovieClass(player) == "GG2HudShootingStencilSightMovie") cat = kFullscreen;
         if (cat == kPanel && EffectMovieInEye() && MovieClass(player) == "GG2HudShootingEffectMovie")
             cat = kEye;
+        if (cat == kPanel && ((DokiSelectInEye() && MovieClass(player) == "GG2HudShootingDokiDokiMarkerMovie") ||
+                              (DokiHandInEye() && MovieClass(player) == "GG2HudShootingPointerMovie")))
+            cat = kEye;  // Doki Doki Mode: the girl markers and the hand at their eye-view places
         // the player's HUD toggle (0.9.38: to see a girl grabbing you without the HUD over her): the gameplay
         // read-outs only - warnings, route choices, Doki Doki markers, pop-ups at the reticle and menus stay
         if (cat == kPanel && g_hudHidden.load() && g_hudToggleCtx.load()) {
@@ -1416,12 +1537,21 @@ void Classify(void* cmd) {
     if (cover != g_coverWorld) LOG("[ui] Mom is coming screen %s", cover ? "up: the world follows its cover" : "gone");
     g_coverWorld = cover;
     {
-        int lastFull = -1, firstPanel = -1;
+        int lastFull = -1, firstPanel = -1, fade = -1, lastMenu = -1;
         for (int i = 0; i < int(g_cats.size()); ++i) {
             if (g_cats[i] == kFullscreen) lastFull = i;
             if (g_cats[i] == kPanel && firstPanel < 0) firstPanel = i;
+            const std::string& mc = MovieClass(g_players[i]);
+            if (g_cats[i] == kFullscreen && mc == "GG2ScreenFadeMovie") fade = i;
+            if (g_cats[i] == kPanel && mc != "GG2NowLoadingMovie" && mc != "GG2HudMouseCursorMovie") lastMenu = i;
         }
         const bool over = firstPanel < 0 || lastFull > firstPanel;
+        // a window the game raised above its screen fade (the stat window after Doki-Doki Mode over a white fade, Score
+        // Attack's saving icon, Mom is coming): the panel is captured in two parts around the fade (an earlier version put the whole
+        // fade under the panel: covered windows showed, but a steady tint vanished behind the panel)
+        const int split = fade >= 0 && lastMenu > fade ? fade : -1;
+        if ((split >= 0) != (g_panelSplit >= 0)) LOG("[ui] panel %s", split >= 0 ? "split around the screen fade (a window above it)" : "in one piece");
+        g_panelSplit = split;
         if (over != g_fsOverPanel) {
             g_fsOverPanel = over;
             LOG("[ui] full-screen effects %s the panel's content (game draw order)", over ? "over" : "under");
@@ -1682,13 +1812,13 @@ void TryGridMeasure(ID3D11DeviceContext* ctx) {
             (py + period) / bh, mean);
 }
 // Render the movies whose category bit is in `mask` (or exactly movie `only` if >= 0).
-void RunSubset(void* cmd, uint32_t mask, int only = -1) {
+void RunSubset(void* cmd, uint32_t mask, int only = -1, int lo = 0, int hi = 1 << 30) {  // [lo, hi): movie indices
     auto* arr = reinterpret_cast<MovieArray*>(static_cast<uint8_t*>(cmd) + 0x10);
     const int32_t num = int32_t(g_cats.size());
     int32_t n = 0;
     g_tmp.resize(size_t(num) * kMovieSize + 16);
     for (int32_t i = 0; i < num; ++i)
-        if (only >= 0 ? i == only : ((mask >> g_cats[i]) & 1) != 0)
+        if (only >= 0 ? i == only : ((mask >> g_cats[i]) & 1) != 0 && i >= lo && i < hi)
             memcpy(g_tmp.data() + size_t(n++) * kMovieSize, arr->data + size_t(i) * kMovieSize, kMovieSize);
     if (n == 0) return;
     if (n == arr->num) {
@@ -1960,13 +2090,29 @@ uint32_t ExecInner(void* cmd) {
                 bb->Release();
                 return kGfxRenderUiCmdSize;
             }
-            // panel (+ tint movies): UI over black / white -> g_ui
+            // panel (+ tint movies): UI over black / white -> g_ui. A window the game draws above its screen fade
+            // (Score Attack's saving icon, the stat window after Doki Doki Mode, Mom is coming): the movies below the
+            // fade get it baked over them, those above are captured apart and drawn over that (a steady fade
+            // tint vanished behind the panel)
+            const int split = g_panelSplit;
+            const bool upper = split >= 0 && g_fsValid && g_fsOverPanel && g_backdrop == 0 &&
+                               (g_black2.tex || (g_black2.Create(dev, g_desc.Width, g_desc.Height, g_desc.Format, false) &&
+                                                 g_white2.Create(dev, g_desc.Width, g_desc.Height, g_desc.Format, false)));
+            const int hiA = upper ? split : 1 << 30;
             ctx->ClearRenderTargetView(g_bbRtv, kBlack);
-            RunSubset(cmd, (1u << kPanel) | (1u << kTint));
+            RunSubset(cmd, (1u << kPanel) | (1u << kTint), -1, 0, hiA);
             ctx->CopyResource(g_black.tex, bb);
             ctx->ClearRenderTargetView(g_bbRtv, kWhite);
-            RunSubset(cmd, (1u << kPanel) | (1u << kTint));
+            RunSubset(cmd, (1u << kPanel) | (1u << kTint), -1, 0, hiA);
             ctx->CopyResource(g_white.tex, bb);
+            if (upper) {
+                ctx->ClearRenderTargetView(g_bbRtv, kBlack);
+                RunSubset(cmd, 1u << kPanel, -1, split + 1);
+                ctx->CopyResource(g_black2.tex, bb);
+                ctx->ClearRenderTargetView(g_bbRtv, kWhite);
+                RunSubset(cmd, 1u << kPanel, -1, split + 1);
+                ctx->CopyResource(g_white2.tex, bb);
+            }
             DumpMovies(cmd, dev, ctx, bb);
             ZoomGeo zg;
             xr::FrameRecord zr;
@@ -1993,7 +2139,7 @@ uint32_t ExecInner(void* cmd) {
                 g_panelExtFrac = bh ? float(ext) / float(bh) : 0.f;
                 g_uiExtRows = ext, g_uiBandW = bw, g_uiBandH = bh;
             }
-            if (Combine(dev, ctx, g_ui, !zoom, zoom ? &zg : nullptr, false, true, ext)) {
+            if (Combine(dev, ctx, g_ui, !zoom, zoom ? &zg : nullptr, false, true, ext, upper)) {
                 // name_tags_3d: the parked tag's region of this same capture -> g_tag, and blanked on the panel
                 g_tagValid = false;
                 if (config::Get().vrNameTags3d && GetTickCount64() - g_tagParkT.load() < 250) {
@@ -2179,6 +2325,24 @@ bool FddmDokiOffset(int i, float& ox, float& oy) {
     return true;
 }
 bool EffectFullView() { return config::Get().vrEffectFullView && config::Get().vrMode == 2 && EffectMovieInEye(); }
+// Kiss / stomp marks: the movie's SetEffectKiss / Kick never read their scale argument, so the clips they attach
+// (_root.effKiss<i>, _root.effFoot01_<i>) are sized after them: kiss_mark_size / stomp_mark_size of the game's own size
+// ("the shoe prints ... cover too much of the screen"). Game thread.
+void SizeMarks(bool kick) {
+    const float k = 100.f * (kick ? config::Get().vrStompMarkSize : config::Get().vrKissMarkSize);
+    if (std::fabs(k - 100.f) < 0.5f) return;
+    static uintptr_t s_player = 0;
+    if (!s_player || !ue3::IsObject(s_player)) s_player = gfx::FindPlayer("GG2HudShootingEffectMovie");
+    if (!s_player) return;
+    float count = 0.f;
+    if (!gfx::GetNumber(s_player, "_root.MAX_HOLD_EFFECT", count) || count < 1.f || count > 64.f) count = 8.f;
+    for (int i = 0; i < int(count); ++i) {
+        const std::string clip = (kick ? "_root.effFoot01_" : "_root.effKiss") + std::to_string(i);
+        gfx::SetNumber(s_player, clip + "._xscale", k), gfx::SetNumber(s_player, clip + "._yscale", k);
+    }
+    static int s_logs = 0;
+    if (s_logs++ < 3) LOG("[ui] %s marks: %.0f%% of the game's size", kick ? "stomp" : "kiss", k);
+}
 bool __fastcall hk_Invoke(void* view, const char* method, void* result, const void* args, uint32_t n) {
     if (method) {  // diag: every distinct ActionScript method called (pause menu input, damage events, ...)
         // the Continue prompt's movie stays open (root visible) after Continue: its own calls bound the prompt
@@ -2532,9 +2696,44 @@ bool __fastcall hk_Invoke(void* view, const char* method, void* result, const vo
         // (SetPointerPosition(x, y), ConvScreenPos of the sight cursor - eye-view since its Y hook): all eye-view
         // stage coords, so all onto the panel like the boss markers (reported: the selector wasn't over the girls, the hand
         // cursor was off the real one).
+        // with controller aim, while the target select is up, the marker and hand movies are drawn per eye (kEye,
+        // like the boss markers - reported: the markers didn't appear outside the panel): their eye-view positions kept
         {
             const bool marker = !strcmp(tail, "SetDokiDokiMarkerPosition") || !strcmp(tail, "GetTouchDokiDokiMarker");
             const bool hand = !strcmp(tail, "SetPointerPosition");
+            if (!strcmp(tail, "SetDokiDokiMarkerPosition") && n == 3 && args && ArgNum(static_cast<const uint8_t*>(args), 2) > -100.0)
+                g_dkSelectT = GetTickCount64();
+            if (!strcmp(tail, "SetDokiDokiMarkerScale") && n == 3 && args && DokiSelectInEye()) {  // flat-screen size
+                uint8_t a[3 * 48];
+                memcpy(a, args, sizeof a);
+                const float k = vr::FlatProportion();
+                const double sx = ArgNum(a, 1), sy = ArgNum(a, 2);
+                if (ArgAdd(a, 1, sx * (k - 1)) && ArgAdd(a, 2, sy * (k - 1))) {
+                    static int s_logs = 0;
+                    if (s_logs++ < 6) LOG("[ui] doki marker scale (%.2f,%.2f) x %.2f (drawn per eye)", sx, sy, k);
+                    return o_Invoke(view, method, result, a, n);
+                }
+            }
+            if (((marker && n == 3 && DokiSelectInEye()) || (hand && n == 2 && DokiHandInEye())) && args) {
+                uint8_t a[3 * 48];
+                memcpy(a, args, size_t(n) * 48);
+                const int iy = marker ? 2 : 1;
+                const bool shown = ArgNum(a, iy) > -100.0;
+                if (!strcmp(tail, "SetDokiDokiMarkerPosition") && config::Get().vrEffectStereo)
+                    RecordEffectX(0x30000u | (uint32_t(ArgNum(a, 0)) & 0xFFFF), ArgNum(a, 1), ArgNum(a, 2));
+                static int s_logs = 0;
+                if (s_logs++ < 6) LOG("[ui] doki %s (%.0f,%.0f) kept (drawn per eye)", tail, ArgNum(a, iy - 1), ArgNum(a, iy));
+                // the cursor field lacks the band's top (see below): eye-view = + top; the layer over the whole view
+                // (effect_full_view) is band-relative, so: the projections - top, the cursor as it is
+                const bool touch = !strcmp(tail, "GetTouchDokiDokiMarker");
+                const double dy = EffectFullView() ? (touch ? 0.0 : -double(vr::BandTopStage())) : (touch ? double(vr::BandTopStage()) : 0.0);
+                bool changed = shown && dy != 0.0 && ArgAdd(a, iy, dy);
+                if (hand && shown && g_handScale > 0.05f && g_handScale != 1.f) {  // the hand movie's _root is scaled
+                    const double k = 1.0 / g_handScale - 1.0;
+                    changed = ArgAdd(a, 0, ArgNum(a, 0) * k) && ArgAdd(a, 1, ArgNum(a, 1) * k);
+                }
+                return o_Invoke(view, method, result, changed ? a : args, n);
+            }
             if (((marker && n == 3) || (hand && n == 2)) && args) {
                 uint8_t a[3 * 48];
                 memcpy(a, args, size_t(n) * 48);
@@ -2652,7 +2851,11 @@ bool __fastcall hk_Invoke(void* view, const char* method, void* result, const vo
                 // out and draws at her head in each eye (her per-eye position recorded here)
                 if (shown && id == 0 && config::Get().vrNameTags3d) {
                     const float ext = g_panelExtFrac.load() * 1080.f;
-                    const bool offPanel = conv && (fx < 0.f || fx > 1920.f || fy < -ext || fy > 1080.f + ext);
+                    // (before the tag's box reaches the left / right edge, where it was cut off in half - 60 further in to come back)
+                    static bool s_tag3d = false;
+                    const float edge = s_tag3d ? 360.f : 300.f;
+                    const bool offPanel = conv && (fx < edge || fx > 1920.f - edge || fy < -ext || fy > 1080.f + ext);
+                    s_tag3d = !conv || offPanel;
                     if (!conv || offPanel) {
                         if (eye == 0 || eye == 1) g_tagEyeX[eye] = float(x), g_tagEyeY[eye] = float(y), g_tagEyeT[eye] = now;
                         g_tagParkT = now;
@@ -2714,14 +2917,22 @@ bool __fastcall hk_Invoke(void* view, const char* method, void* result, const vo
         uint8_t* py = a + 48;
         const uint32_t t = *reinterpret_cast<uint32_t*>(py + 0x18);
         const float top = vr::BandTopStage();
-        if (EffectFullView()) return o_Invoke(view, method, result, args, n);  // 0.9.70 C: band-relative = layer rows
+        const char* mt = strrchr(method, '.');
+        const bool kick = !strcmp(mt ? mt + 1 : method, "SetEffectKick"), kiss = !strcmp(mt ? mt + 1 : method, "SetEffectKiss");
+        auto call = [&](const void* ar, uint32_t c) {
+            const bool r = o_Invoke(view, method, result, ar, c);
+            if (kick || kiss) SizeMarks(kick);
+            return r;
+        };
+        if (EffectFullView()) return call(args, n);  // 0.9.70 C: band-relative = layer rows
         if (top > 0.f && (t == 5 || t == 3 || t == 4)) {
             if (t == 5) *reinterpret_cast<double*>(py + 0x20) += top;
             else *reinterpret_cast<int32_t*>(py + 0x20) += int32_t(top);
             static int s_logs = 0;
             if (s_logs++ < 4) LOG("[ui] %s: y + %.0f (band top) for the per-eye layer", strrchr(method, '.') ? strrchr(method, '.') + 1 : method, top);
-            return o_Invoke(view, method, result, a, cnt);
+            return call(a, cnt);
         }
+        if (kick || kiss) return call(args, n);
     }
     if (method && g_enabled && !config::Get().vrScreenMarks && IsScreenMark(method)) {
         static std::atomic<int> s_dropLogs{0};
@@ -2764,16 +2975,16 @@ void SetEnabled(bool on) {
 bool Enabled() { return g_enabled; }
 bool FantasizeActive() { return g_fantasize.load(); }
 void BandOf(uint32_t w, uint32_t h, uint32_t& x0, uint32_t& y0, uint32_t& bw, uint32_t& bh) { Band(w, h, x0, y0, bw, bh); }
+std::atomic<float> g_panelElevDeg{0.f};
 void SetTallPanel(bool on) {
     if (g_tallPanel.exchange(on) != on) LOG("[ui] tall panel %s (width %.2f m)", on ? "on (minigame)" : "off", PanelWidth());
     xr::SetUiPanelWidth(PanelWidth());
-    xr::SetUiPanelDrop(-PanelYOffset());
+    xr::SetUiPanelElevation(g_panelElevDeg.load());
 }
 // Minigames: the panel's elevation (degrees, negative = below eye level). The panel only covers about +-37 deg around
 // its centre and the icons sit all over her body, so it follows the gaze up / down: still while the gaze stays within
 // minigame_follow_deadzone of its centre, then gliding (~0.5 s) to centre on it (0.9.27: a fixed drop only moved
 // the cut-off from the bottom to the top).
-std::atomic<float> g_panelElevDeg{0.f};
 void UpdatePanelFollow(float pitch) {
     const auto& c = config::Get();
     static bool s_was = false;
@@ -2813,9 +3024,13 @@ void UpdatePanelFollow(float pitch) {
     }
     g_panelElevDeg = e;
 }
-float PanelYOffset() {
-    if (!g_tallPanel.load()) return 0.f;
-    return config::Get().vrUiDistance * std::tan(g_panelElevDeg.load() * 3.14159265f / 180.f);
+void PanelFromRel(float& y, float& z) {
+    const float e = g_tallPanel.load() ? g_panelElevDeg.load() * 3.14159265f / 180.f : 0.f, c = std::cos(e), s = std::sin(e), yy = y;
+    y = yy * c + z * s, z = z * c - yy * s;
+}
+void PanelToRel(float& y, float& z) {
+    const float e = g_tallPanel.load() ? g_panelElevDeg.load() * 3.14159265f / 180.f : 0.f, c = std::cos(e), s = std::sin(e), yy = y;
+    y = yy * c - z * s, z = yy * s + z * c;
 }
 float PanelWidth() {
     const auto& c = config::Get();
@@ -2858,6 +3073,27 @@ void DokiTick() {
     if (GetTickCount64() >= s_find) {  // the movie exists in stages only: looked up twice a second
         s_find = GetTickCount64() + 500;
         if (!s_player || !ue3::IsObject(s_player) || MovieClass(s_player) != "GG2HudDokiLightMovie") s_player = gfx::FindPlayer("GG2HudDokiLightMovie");
+    }
+    // the hand movie's size while it is drawn per eye (Doki Doki Mode): _root scaled to flat-screen size
+    {
+        static uintptr_t s_hand = 0;
+        static ULONGLONG s_handFind = 0;
+        const bool inEye = DokiHandInEye();
+        if ((inEye || g_handScale != 1.f) && GetTickCount64() >= s_handFind &&
+            (!s_hand || !ue3::IsObject(s_hand) || MovieClass(s_hand) != "GG2HudShootingPointerMovie")) {
+            s_handFind = GetTickCount64() + 500;
+            s_hand = gfx::FindPlayer("GG2HudShootingPointerMovie");
+        }
+        const float want = inEye ? std::fmin(1.f, std::fmax(0.2f, vr::FlatProportion())) : 1.f;
+        if (std::fabs(want - g_handScale) > 0.01f) {
+            if (s_hand && ue3::IsObject(s_hand) && gfx::SetNumber(s_hand, "_root._xscale", want * 100.f) &&
+                gfx::SetNumber(s_hand, "_root._yscale", want * 100.f)) {
+                LOG("[ui] Doki Doki hand: %s (scale %.2f)", inEye ? "drawn per eye" : "on the panel", want);
+                g_handScale = want;
+            } else if (!inEye) {
+                g_handScale = 1.f;  // (the movie is gone: nothing to put back)
+            }
+        }
     }
     bool vis = false;
     if (s_player && ue3::IsObject(s_player)) gfx::GetBool(s_player, "_root.effWPeace._visible", vis);

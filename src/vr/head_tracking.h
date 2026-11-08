@@ -51,6 +51,8 @@ void TraceTest();  // dev: !tracetest
 void SetAimDiag(bool on);
 void SetAePin(int mode, float amp, float hz);
 void DevSetPcProperty(const char* name, int v);  // dev: !pcset
+void DevSetObjProperty(const char* cls, const char* name, int v);  // dev: !objset
+void DevCallFunction(const char* spec);  // dev: !callfn (game thread)
 void DevSetHeartGauge(int v);                     // dev: !heart
 void DevDkdkStart();                             // dev: !dkdkstart
 void DevKeyDiag(int seconds);                    // dev: !keydiag

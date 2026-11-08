@@ -14,6 +14,7 @@
 #include "vpad.h"
 #include "ui_layer.h"
 #include "head_tracking.h"
+#include "comfort_turn.h"
 
 namespace ggdpvr::vr::ctrl {
 namespace {
@@ -196,7 +197,9 @@ void UpdateFromXr() {
     // menus on the pointer (Score Attack, save slots, ...): the aim-hand stick scrolls lists like a mouse wheel
     pointer::Scroll(D.stick.y, pointer::SticksAsDpad());
     if (held(kR3)) p.buttons |= vpad::kR3;
-    p.buttons |= StickToDpad(g_dpOff, O.stick.x, O.stick.y);
+    if (comfort::ConsumesStick()) StickToDpad(g_dpOff, 0, 0);  // turning=snap in a stage: the off-hand stick turns the view
+    else p.buttons |= StickToDpad(g_dpOff, O.stick.x, O.stick.y);
+    if (comfort::Held()) p.lx = O.stick.x, p.ly = O.stick.y;  // a hold: the escape also counts the sticks' reversals
     vpad::SetFromControllers(p);
     const bool recenter = held(kRecenter);
     if (recenter && !g_prevRecenter) {
@@ -244,8 +247,15 @@ std::atomic<unsigned long long> g_fakeTriggerUntil{0};  // dev: !faketrigger
 bool TriggerHeld() { return g_trigger.load() || GetTickCount64() < g_fakeTriggerUntil.load(); }
 void FakeTrigger(unsigned ms) { g_fakeTriggerUntil = GetTickCount64() + ms; LOG("[ctrl] simulated trigger for %u ms", ms); }
 std::atomic<unsigned long long> g_fakeGripUntil{0};  // dev: !fakegrip
+std::atomic<unsigned long long> g_fakeStickUntil{0};  // dev: !fakestick
+std::atomic<float> g_fakeStick[2]{};
 void Sticks(float dom[2], float off[2]) {
     dom[0] = g_stick[0].load(), dom[1] = g_stick[1].load(), off[0] = g_stick[2].load(), off[1] = g_stick[3].load();
+    if (GetTickCount64() < g_fakeStickUntil.load()) off[0] = g_fakeStick[0].load(), off[1] = g_fakeStick[1].load();
+}
+void FakeStick(float x, float y, unsigned ms) {
+    g_fakeStick[0] = x, g_fakeStick[1] = y, g_fakeStickUntil = GetTickCount64() + ms;
+    LOG("[ctrl] simulated off-hand stick (%.2f, %.2f) for %u ms", x, y, ms);
 }
 bool OffTriggerHeld() { return g_offTrigger.load(); }
 bool GripHeld() { return g_grip.load() || GetTickCount64() < g_fakeGripUntil.load(); }
